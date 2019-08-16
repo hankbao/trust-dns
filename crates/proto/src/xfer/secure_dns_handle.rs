@@ -97,7 +97,7 @@ where
 }
 
 impl<H: DnsHandle> DnsHandle for SecureDnsHandle<H> {
-    type Response = Box<dyn Future<Item = DnsResponse, Error = ProtoError> + Send>;
+    type Response = Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send>;
 
     fn is_verifying_dnssec(&self) -> bool {
         // This handler is always verifying...
@@ -219,7 +219,7 @@ fn verify_rrsets<H: DnsHandle>(
     handle: &SecureDnsHandle<H>,
     message_result: DnsResponse,
     dns_class: DNSClass,
-) -> Box<dyn Future<Item = DnsResponse, Error = ProtoError> + Send> {
+) -> Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send> {
     let mut rrset_types: HashSet<(Name, RecordType)> = HashSet::new();
     for rrset in message_result
         .answers()
@@ -320,10 +320,9 @@ fn is_dnssec(rr: &Record, dnssec_type: DNSSECRecordType) -> bool {
 }
 
 impl Future for VerifyRrsetsFuture {
-    type Item = DnsResponse;
-    type Error = ProtoError;
+    type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         if self.message_result.is_none() {
             return Err(ProtoError::from(ProtoErrorKind::Message("message is none")));
         }
@@ -418,7 +417,7 @@ fn verify_rrset<H>(
     handle: SecureDnsHandle<H>,
     rrset: Rrset,
     rrsigs: Vec<Record>,
-) -> Box<dyn Future<Item = Rrset, Error = ProtoError> + Send>
+) -> Box<dyn Future<Output = Result<Rrset, ProtoError>> + Send>
 where
     H: DnsHandle,
 {
@@ -460,7 +459,7 @@ where
 fn verify_dnskey_rrset<H>(
     mut handle: SecureDnsHandle<H>,
     rrset: Rrset,
-) -> Box<dyn Future<Item = Rrset, Error = ProtoError> + Send>
+) -> Box<dyn Future<Output = Result<Rrset, ProtoError>> + Send>
 where
     H: DnsHandle,
 {
@@ -631,7 +630,7 @@ fn verify_default_rrset<H>(
     handle: &SecureDnsHandle<H>,
     rrset: Rrset,
     rrsigs: Vec<Record>,
-) -> Box<dyn Future<Item = Rrset, Error = ProtoError> + Send>
+) -> Box<dyn Future<Output = Result<Rrset, ProtoError> + Send>>
 where
     H: DnsHandle,
 {

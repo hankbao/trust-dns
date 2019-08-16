@@ -106,13 +106,12 @@ impl<S: AsyncRead + AsyncWrite + Send> Stream for TcpClientStream<S> {
 
 // TODO: create unboxed future for the TCP Stream
 /// A future that resolves to an TcpClientStream
-pub struct TcpClientConnect<S>(Box<dyn Future<Item = TcpClientStream<S>, Error = ProtoError> + Send>);
+pub struct TcpClientConnect<S>(Box<dyn Future<Output = Result<TcpClientStream<S>, ProtoError>> + Send>);
 
 impl<S> Future for TcpClientConnect<S> {
-    type Item = TcpClientStream<S>;
-    type Error = ProtoError;
+    type Output = Result<TcpClientStream<S>, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.0.poll()
     }
 }

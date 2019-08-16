@@ -204,14 +204,13 @@ where
 
 impl<F, S, R> Future for DnsExchangeConnectInner<F, S, R>
 where
-    F: Future<Item = S, Error = ProtoError> + 'static + Send,
+    F: Future<Output = Result<S, ProtoError>> + 'static + Send,
     S: DnsRequestSender<DnsResponseFuture = R>,
-    R: Future<Item = DnsResponse, Error = ProtoError> + 'static + Send,
+    R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send,
 {
-    type Item = DnsExchange<S, R>;
-    type Error = ProtoError;
+    type Output = Result<DnsExchange<S, R>, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(&mut self) -> Poll<Self::Output> {
         loop {
             let next;
             match self {

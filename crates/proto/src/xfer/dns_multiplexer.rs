@@ -63,7 +63,7 @@ impl ActiveRequest {
     }
 
     /// polls the timeout and converts the error
-    fn poll_timeout(&mut self) -> Poll<(), ProtoError> {
+    fn poll_timeout(&mut self) -> Poll<Result<(), ProtoError>> {
         self.timeout.poll().map_err(ProtoError::from)
     }
 
@@ -145,7 +145,7 @@ where
         signer: Option<Arc<MF>>,
     ) -> DnsMultiplexerConnect<F, S, MF>
     where
-        F: Future<Item = S, Error = ProtoError> + Send + 'static,
+        F: Future<Output = Result<S, ProtoError>> + Send + 'static,
     {
         Self::with_timeout(stream, stream_handle, Duration::from_secs(5), signer)
     }
@@ -167,7 +167,7 @@ where
         signer: Option<Arc<MF>>,
     ) -> DnsMultiplexerConnect<F, S, MF>
     where
-        F: Future<Item = S, Error = ProtoError> + Send + 'static,
+        F: Future<Output = Result<S, ProtoError>> + Send + 'static,
     {
         DnsMultiplexerConnect {
             stream,
@@ -258,8 +258,8 @@ where
 #[must_use = "futures do nothing unless polled"]
 pub struct DnsMultiplexerConnect<F, S, MF>
 where
-    F: Future<Item = S, Error = ProtoError> + Send + 'static,
-    S: Stream<Item = SerialMessage, Error = ProtoError>,
+    F: Future<Output = Result<S, ProtoError>> + Send + 'static,
+    S: Stream<Item = Result<SerialMessage, ProtoError>>,
     MF: MessageFinalizer + Send + Sync + 'static,
 {
     stream: F,
@@ -270,14 +270,13 @@ where
 
 impl<F, S, MF> Future for DnsMultiplexerConnect<F, S, MF>
 where
-    F: Future<Item = S, Error = ProtoError> + Send + 'static,
+    F: Future<Output = Result<S, ProtoError>> + Send + 'static,
     S: DnsClientStream + 'static,
     MF: MessageFinalizer + Send + Sync + 'static,
 {
-    type Item = DnsMultiplexer<S, MF, Box<dyn DnsStreamHandle>>;
-    type Error = ProtoError;
+    type Output = Result<DnsMultiplexer<S, MF, Box<dyn DnsStreamHandle>>, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let stream: S = try_ready!(self.stream.poll());
 
         Ok(Async::Ready(DnsMultiplexer {
@@ -483,10 +482,9 @@ impl DnsMultiplexerSerialResponse {
 }
 
 impl Future for DnsMultiplexerSerialResponse {
-    type Item = DnsResponse;
-    type Error = ProtoError;
+    type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.0.poll()
     }
 }
@@ -503,10 +501,9 @@ enum DnsMultiplexerSerialResponseInner {
 }
 
 impl Future for DnsMultiplexerSerialResponseInner {
-    type Item = DnsResponse;
-    type Error = ProtoError;
+    type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match self {
             // The inner type of the completion might have been an error
             //   we need to unwrap that, and translate to be the Future's error

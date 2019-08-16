@@ -39,7 +39,7 @@ impl<H> DnsHandle for RetryDnsHandle<H>
 where
     H: DnsHandle + 'static,
 {
-    type Response = Box<dyn Future<Item = DnsResponse, Error = ProtoError> + Send>;
+    type Response = Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send>;
 
     fn send<R: Into<DnsRequest>>(&mut self, request: R) -> Self::Response {
         let request = request.into();
@@ -66,10 +66,9 @@ struct RetrySendFuture<H: DnsHandle> {
 }
 
 impl<H: DnsHandle> Future for RetrySendFuture<H> {
-    type Item = DnsResponse;
-    type Error = ProtoError;
+    type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut self>, cx: &mut Context) -> Poll<Self::Output> {
         // loop over the future, on errors, spawn a new future
         //  on ready and not ready return.
         loop {
@@ -107,7 +106,7 @@ mod test {
     }
 
     impl DnsHandle for TestClient {
-        type Response = Box<dyn Future<Item = DnsResponse, Error = ProtoError> + Send>;
+        type Response = Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send>;
 
         fn send<R: Into<DnsRequest>>(&mut self, _: R) -> Self::Response {
             let i = self.attempts.get();

@@ -66,12 +66,12 @@ impl BasicDnsHandle {
 }
 
 impl DnsHandle for BasicDnsHandle {
-    type Response = Box<dyn Future<Item = DnsResponse, Error = ProtoError> + Send>;
+    type Response = Box<dyn Future<Ouput = Result<DnsResponse, ProtoError>> + Send>;
 
     fn send<R: Into<DnsRequest>>(
         &mut self,
         request: R,
-    ) -> Box<dyn Future<Item = DnsResponse, Error = ProtoError> + Send> {
+    ) -> Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send> {
         let request = request.into();
         let (complete, receiver) = oneshot::channel();
         let message_sender: &mut _ = &mut self.message_sender;
