@@ -27,9 +27,9 @@ where
     fn bind(addr: &SocketAddr) -> io::Result<Self>;
     /// Receive data from the socket and returns the number of bytes read and the address from
     /// where the data came on success.
-    fn poll_recv_from(&mut self, buf: &mut [u8]) -> Poll<(usize, SocketAddr), io::Error>;
+    fn async recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)>;
     /// Send data to the given address.
-    fn poll_send_to(&mut self, buf: &[u8], target: &SocketAddr) -> Poll<(), io::Error>;
+    fn async send_to(&mut self, buf: &[u8], target: &SocketAddr) -> io::Result<usize>;
 }
 
 /// A UDP stream of DNS binary packets
@@ -56,7 +56,7 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
     pub fn new(
         name_server: SocketAddr,
     ) -> (
-        Box<dyn Future<Item = UdpStream<S>, Error = io::Error> + Send>,
+        Box<dyn Future<Output = Result<UdpStream<S>, io::Error>> + Send>,
         BufStreamHandle,
     ) {
         let (message_sender, outbound_messages) = unbounded();
@@ -114,10 +114,9 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
 }
 
 impl<S: UdpSocket> Stream for UdpStream<S> {
-    type Item = SerialMessage;
-    type Error = io::Error;
+    type Item = Result<SerialMessage, io::Error>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // this will not accept incoming data while there is data to send
         //  makes this self throttling.
         loop {
@@ -178,13 +177,12 @@ impl<S> NextRandomUdpSocket<S> {
 }
 
 impl<S: UdpSocket> Future for NextRandomUdpSocket<S> {
-    type Item = S;
-    type Error = io::Error;
+    type Output = Result<S, io::Error>;
 
     /// polls until there is an available next random UDP port.
     ///
     /// if there is no port available after 10 attempts, returns NotReady
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let rand_port_range = Uniform::new_inclusive(1025_u16, u16::max_value());
         let mut rand = rand::thread_rng();
 
@@ -244,11 +242,11 @@ impl UdpSocket for tokio_udp::UdpSocket {
     fn bind(addr: &SocketAddr) -> io::Result<Self> {
         tokio_udp::UdpSocket::bind(addr)
     }
-    fn poll_recv_from(&mut self, buf: &mut [u8]) -> Poll<(usize, SocketAddr), io::Error> {
-        self.poll_recv_from(buf)
+    fn async recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.recv_from(buf)
     }
-    fn poll_send_to(&mut self, buf: &[u8], target: &SocketAddr) -> Poll<(), io::Error> {
-        self.poll_send_to(buf, target).map(|x| match x {
+    fn async send_to(&mut self, buf: &[u8], target: &SocketAddr) -> io::Result<usize> {
+        self.send_to(buf, target).map(|x| match x {
             Async::Ready(_) => Async::Ready(()),
             Async::NotReady => Async::NotReady,
         })

@@ -9,7 +9,7 @@
 
 #![deny(missing_docs)]
 
-use std::{fmt, io, sync};
+use std::{fmt, io, pin::Pin, sync, task::Context};
 
 use crate::rr::{Name, RecordType};
 
@@ -33,8 +33,8 @@ pub type ProtoResult<T> = ::std::result::Result<T, ProtoError>;
 #[derive(Eq, PartialEq, Debug, Fail)]
 pub enum ProtoErrorKind {
     /// An error caused by a canceled future
-    #[fail(display = "future was canceled: {:?}", _0)]
-    Canceled(::futures::sync::oneshot::Canceled),
+    // #[fail(display = "future was canceled: {:?}", _0)]
+    // Canceled(::tokio::sync::oneshot::Canceled),
 
     /// Character data length exceeded the limit
     #[fail(display = "char data length exceeds {}: {}", _0, _1)]

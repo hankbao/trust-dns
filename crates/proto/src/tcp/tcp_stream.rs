@@ -28,7 +28,7 @@ where
     /// TcpSteam
     type Transport: io::Read + io::Write + Send;
     /// Future returned by connect
-    type Future: Future<Item = Self::Transport, Error = io::Error> + Send;
+    type Future: Future<Output = Result<Self::Transport, io::Error>> + Send;
     /// connect to tcp
     fn connect(addr: &SocketAddr) -> Self::Future;
 }
@@ -102,7 +102,7 @@ impl<S: Connect + 'static> TcpStream<S> {
     pub fn new<E>(
         name_server: SocketAddr,
     ) -> (
-        Box<dyn Future<Item = TcpStream<S::Transport>, Error = io::Error> + Send>,
+        Box<dyn Future<Output = Result<TcpStream<S::Transport>, io::Error>> + Send>,
         BufStreamHandle,
     )
     where
@@ -122,7 +122,7 @@ impl<S: Connect + 'static> TcpStream<S> {
         name_server: SocketAddr,
         timeout: Duration,
     ) -> (
-        Box<dyn Future<Item = TcpStream<S::Transport>, Error = io::Error> + Send>,
+        Box<dyn Future<Output = Result<TcpStream<S::Transport>, io::Error>> + Send>,
         BufStreamHandle,
     ) {
         let (message_sender, outbound_messages) = unbounded();
@@ -196,10 +196,9 @@ impl<S> TcpStream<S> {
 }
 
 impl<S: io::Read + io::Write> Stream for TcpStream<S> {
-    type Item = SerialMessage;
-    type Error = io::Error;
+    type Item = io::Result<SerialMessage>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // this will not accept incoming data while there is data to send
         //  makes this self throttling.
         // TODO: it might be interesting to try and split the sending and receiving futures.

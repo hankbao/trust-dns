@@ -403,10 +403,9 @@ where
     S: DnsClientStream + 'static,
     MF: MessageFinalizer + Send + Sync + 'static,
 {
-    type Item = ();
-    type Error = ProtoError;
+    type Item = Result<(), ProtoError>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // Always drop the cancelled queries first
         self.drop_cancelled();
 

@@ -209,7 +209,7 @@ impl<H: DnsHandle> DnsHandle for SecureDnsHandle<H> {
 /// A future to verify all RRSets in a returned Message.
 struct VerifyRrsetsFuture {
     message_result: Option<DnsResponse>,
-    rrsets: SelectAll<Box<dyn Future<Item = Rrset, Error = ProtoError> + Send>>,
+    rrsets: SelectAll<Box<dyn Future<Output = Result<Rrset, ProtoError>> + Send>>,
     verified_rrsets: HashSet<(Name, RecordType)>,
 }
 
@@ -256,7 +256,7 @@ fn verify_rrsets<H: DnsHandle>(
 
     // collect all the rrsets to verify
     // TODO: is there a way to get rid of this clone() safely?
-    let mut rrsets: Vec<Box<dyn Future<Item = Rrset, Error = ProtoError> + Send>> =
+    let mut rrsets: Vec<Box<dyn Future<Output = Result<Rrset, ProtoError>> + Send>> =
         Vec::with_capacity(rrset_types.len());
     for (name, record_type) in rrset_types {
         // TODO: should we evaluate the different sections (answers and name_servers) separately?

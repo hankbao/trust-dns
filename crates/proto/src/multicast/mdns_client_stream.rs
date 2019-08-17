@@ -89,7 +89,7 @@ impl Stream for MdnsClientStream {
     type Item = SerialMessage;
     type Error = ProtoError;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         match try_ready!(self.mdns_stream.poll().map_err(ProtoError::from)) {
             Some(serial_message) => {
                 // TODO: for mDNS queries could come from anywhere. It's not clear that there is anything
@@ -102,13 +102,13 @@ impl Stream for MdnsClientStream {
 }
 
 /// A future that resolves to an MdnsClientStream
-pub struct MdnsClientConnect(Box<Future<Item = MdnsClientStream, Error = ProtoError> + Send>);
+pub struct MdnsClientConnect(Box<Future<Output = Result<MdnsClientStream, ProtoError>> + Send>);
 
 impl Future for MdnsClientConnect {
     type Item = MdnsClientStream;
     type Error = ProtoError;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.0.poll()
     }
 }

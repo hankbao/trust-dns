@@ -51,7 +51,7 @@ impl MdnsStream {
         packet_ttl: Option<u32>,
         ipv4_if: Option<Ipv4Addr>,
     ) -> (
-        Box<Future<Item = MdnsStream, Error = io::Error> + Send>,
+        Box<Future<Output = Result<MdnsStream, io::Error>> + Send>,
         BufStreamHandle,
     ) {
         Self::new(*MDNS_IPV4, mdns_query_type, packet_ttl, ipv4_if, None)
@@ -63,7 +63,7 @@ impl MdnsStream {
         packet_ttl: Option<u32>,
         ipv6_if: Option<u32>,
     ) -> (
-        Box<Future<Item = MdnsStream, Error = io::Error> + Send>,
+        Box<Future<Output = Result<MdnsStream, io::Error>> + Send>,
         BufStreamHandle,
     ) {
         Self::new(*MDNS_IPV6, mdns_query_type, packet_ttl, None, ipv6_if)
@@ -102,7 +102,7 @@ impl MdnsStream {
         ipv4_if: Option<Ipv4Addr>,
         ipv6_if: Option<u32>,
     ) -> (
-        Box<Future<Item = MdnsStream, Error = io::Error> + Send>,
+        Box<Future<Output = Result<MdnsStream, io::Error>> + Send>,
         BufStreamHandle,
     ) {
         let (message_sender, outbound_messages) = unbounded();
@@ -264,7 +264,7 @@ impl Stream for MdnsStream {
     type Item = SerialMessage;
     type Error = io::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         assert!(self.datagram.is_some() || self.multicast.is_some());
 
         // we poll the datagram socket first, if available, since it's a direct response or direct request
@@ -345,7 +345,7 @@ impl Future for NextRandomUdpSocket {
     /// polls until there is an available next random UDP port.
     ///
     /// if there is no port available after 10 attempts, returns NotReady
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         // non-one-shot, i.e. continuous, always use one of the well-known mdns ports and bind to the multicast addr
         if !self.mdns_query_type.sender() {
             debug!("skipping sending stream");

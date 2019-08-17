@@ -84,10 +84,9 @@ impl<S: AsyncRead + AsyncWrite + Send> DnsClientStream for TcpClientStream<S> {
 }
 
 impl<S: AsyncRead + AsyncWrite + Send> Stream for TcpClientStream<S> {
-    type Item = SerialMessage;
-    type Error = ProtoError;
+    type Item = Result<SerialMessage, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         match try_ready!(self.tcp_stream.poll().map_err(ProtoError::from)) {
             Some(message) => {
                 // this is busted if the tcp connection doesn't have a peer

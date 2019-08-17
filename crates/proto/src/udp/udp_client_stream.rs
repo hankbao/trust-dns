@@ -180,10 +180,9 @@ impl<S: UdpSocket + Send + 'static, MF: MessageFinalizer> DnsRequestSender
 
 // TODO: is this impl necessary? there's nothing being driven here...
 impl<S: Send, MF: MessageFinalizer> Stream for UdpClientStream<S, MF> {
-    type Item = ();
-    type Error = ProtoError;
+    type Item = Result<(), ProtoError>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // Technically the Stream doesn't actually do anything.
         if self.is_shutdown {
             Ok(Async::Ready(None))
@@ -212,10 +211,9 @@ impl<S> UdpResponse<S> {
 }
 
 impl<S: UdpSocket> Future for UdpResponse<S> {
-    type Item = DnsResponse;
-    type Error = ProtoError;
+    type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.0.poll().map_err(ProtoError::from)
     }
 }
@@ -233,10 +231,9 @@ where
 }
 
 impl<S: Send, MF: MessageFinalizer> Future for UdpClientConnect<S, MF> {
-    type Item = UdpClientStream<S, MF>;
-    type Error = ProtoError;
+    type Output = Result<UdpClientStream<S, MF>, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         Ok(Async::Ready(UdpClientStream::<S, MF> {
             name_server: self
                 .name_server
@@ -260,10 +257,9 @@ enum SingleUseUdpSocket<S> {
 }
 
 impl<S: UdpSocket> Future for SingleUseUdpSocket<S> {
-    type Item = DnsResponse;
-    type Error = ProtoError;
+    type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             *self = match *self {
                 SingleUseUdpSocket::StartSend(ref mut msg, msg_id) => {

@@ -21,7 +21,7 @@ use crate::xfer::{DnsRequest, DnsRequestSender, DnsRequestStreamHandle, DnsRespo
 pub struct DnsExchange<S, R>
 where
     S: DnsRequestSender<DnsResponseFuture = R>,
-    R: Future<Item = DnsResponse, Error = ProtoError> + 'static + Send,
+    R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send,
 {
     io_stream: S,
     outbound_messages: Peekable<UnboundedReceiver<OneshotDnsRequest<R>>>,
@@ -30,7 +30,7 @@ where
 impl<S, R> DnsExchange<S, R>
 where
     S: DnsRequestSender<DnsResponseFuture = R>,
-    R: Future<Item = DnsResponse, Error = ProtoError> + 'static + Send,
+    R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send,
 {
     /// Initializes a TcpStream with an existing tokio_tcp::TcpStream.
     ///
@@ -64,7 +64,7 @@ where
     /// The connect_future should be lazy.
     pub fn connect<F>(connect_future: F) -> (DnsExchangeConnect<F, S, R>, DnsRequestStreamHandle<R>)
     where
-        F: Future<Item = S, Error = ProtoError> + 'static + Send,
+        F: Future<Output = Result<S, ProtoError>> + 'static + Send,
     {
         let (message_sender, outbound_messages) = unbounded();
         (
@@ -77,13 +77,12 @@ where
 impl<S, R> Future for DnsExchange<S, R>
 where
     S: DnsRequestSender<DnsResponseFuture = R>,
-    R: Future<Item = DnsResponse, Error = ProtoError> + 'static + Send,
+    R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send,
 {
-    type Item = ();
-    type Error = ProtoError;
+    type Output = Result<(), ProtoError>;
 
     #[allow(clippy::unused_unit)]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         // this will not accept incoming data while there is data to send
         //  makes this self throttling.
         loop {
@@ -151,15 +150,15 @@ where
 /// A wrapper for a future DnsExchange connection
 pub struct DnsExchangeConnect<F, S, R>(DnsExchangeConnectInner<F, S, R>)
 where
-    F: Future<Item = S, Error = ProtoError> + 'static + Send,
+    F: Future<Output = Result<S, ProtoError>> + 'static + Send,
     S: DnsRequestSender<DnsResponseFuture = R>,
-    R: Future<Item = DnsResponse, Error = ProtoError> + 'static + Send;
+    R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send;
 
 impl<F, S, R> DnsExchangeConnect<F, S, R>
 where
-    F: Future<Item = S, Error = ProtoError> + 'static + Send,
+    F: Future<Output = Result<S, ProtoError>> + 'static + Send,
     S: DnsRequestSender<DnsResponseFuture = R>,
-    R: Future<Item = DnsResponse, Error = ProtoError> + 'static + Send,
+    R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send,
 {
     fn connect(
         connect_future: F,
@@ -174,23 +173,22 @@ where
 
 impl<F, S, R> Future for DnsExchangeConnect<F, S, R>
 where
-    F: Future<Item = S, Error = ProtoError> + 'static + Send,
+    F: Future<Output = Result<S, ProtoError>> + 'static + Send,
     S: DnsRequestSender<DnsResponseFuture = R>,
-    R: Future<Item = DnsResponse, Error = ProtoError> + 'static + Send,
+    R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send,
 {
-    type Item = DnsExchange<S, R>;
-    type Error = ProtoError;
+    type Output = Result<DnsExchange<S, R>, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(&mut self) -> Poll<Self::Output> {
         self.0.poll()
     }
 }
 
 enum DnsExchangeConnectInner<F, S, R>
 where
-    F: Future<Item = S, Error = ProtoError> + 'static + Send,
+    F: Future<Output = Result<S, ProtoError>> + 'static + Send,
     S: DnsRequestSender<DnsResponseFuture = R>,
-    R: Future<Item = DnsResponse, Error = ProtoError> + 'static + Send,
+    R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send,
 {
     Connecting {
         connect_future: F,
