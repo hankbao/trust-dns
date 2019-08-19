@@ -270,9 +270,9 @@ impl Stream for MdnsStream {
         // we poll the datagram socket first, if available, since it's a direct response or direct request
         if let Some(ref mut datagram) = self.datagram {
             match datagram.poll() {
-                Ok(Async::Ready(data)) => return Ok(Async::Ready(data)),
+                Poll::Ready(Ok(data)) => return Poll::Ready(Ok(data)),
                 Err(err) => return Err(err),
-                Ok(Async::NotReady) => (), // drop through
+                Poll::Pending => (), // drop through
             }
         }
 
@@ -282,13 +282,13 @@ impl Stream for MdnsStream {
             // TODO: should we drop this packet if it's not from the same src as dest?
             let (len, src) = try_ready!(multicast.poll_recv_from(&mut buf));
             // now return the multicast
-            return Ok(Async::Ready(Some(SerialMessage::new(
+            return Poll::Ready(Some(Ok(SerialMessage::new(
                 buf.iter().take(len).cloned().collect(),
                 src,
             ))));
         }
 
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
 
@@ -349,14 +349,14 @@ impl Future for NextRandomUdpSocket {
         // non-one-shot, i.e. continuous, always use one of the well-known mdns ports and bind to the multicast addr
         if !self.mdns_query_type.sender() {
             debug!("skipping sending stream");
-            Ok(Async::Ready(None))
+            Poll::Ready(None)
         } else if self.mdns_query_type.bind_on_5353() {
             let addr = SocketAddr::new(self.bind_address, MDNS_PORT);
             debug!("binding sending stream to {}", addr);
             let socket = std::net::UdpSocket::bind(&addr)?;
             let socket = self.prepare_sender(socket)?;
 
-            Ok(Async::Ready(Some(socket)))
+            Poll::Ready(Some(Ok(socket)))
         } else {
             // TODO: this is basically identical to UdpStream from here... share some code? (except for the port restriction)
             // one-shot queries look very similar to UDP socket, but can't listen on 5353
@@ -380,7 +380,7 @@ impl Future for NextRandomUdpSocket {
                 match std::net::UdpSocket::bind(&addr) {
                     Ok(socket) => {
                         let socket = self.prepare_sender(socket)?;
-                        return Ok(Async::Ready(Some(socket)));
+                        return Poll::Ready(Some(Ok(socket)));
                     }
                     Err(err) => debug!("unable to bind port, attempt: {}: {}", attempt, err),
                 }
@@ -390,7 +390,7 @@ impl Future for NextRandomUdpSocket {
 
             task::current().notify();
             // returning NotReady here, perhaps the next poll there will be some more socket available.
-            Ok(Async::NotReady)
+            Poll::Pending
         }
     }
 }

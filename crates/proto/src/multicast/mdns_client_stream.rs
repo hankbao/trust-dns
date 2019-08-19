@@ -94,9 +94,9 @@ impl Stream for MdnsClientStream {
             Some(serial_message) => {
                 // TODO: for mDNS queries could come from anywhere. It's not clear that there is anything
                 //       we can validate in this case.
-                Ok(Async::Ready(Some(serial_message)))
+                Poll::Ready(Some(Ok(serial_message)))
             }
-            None => Ok(Async::Ready(None)),
+            None => Poll::Ready(None),
         }
     }
 }

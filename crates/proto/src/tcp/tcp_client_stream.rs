@@ -6,10 +6,13 @@
 // copied, modified, or distributed except according to those terms.
 
 use std::fmt::{self, Display};
+use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
+use std::pin::Pin;
+use std::task::Context;
 
-use futures::{Async, Future, Poll, Stream};
+use futures::{Future, Poll, Stream};
 use tokio_io::{AsyncRead, AsyncWrite};
 
 use crate::error::ProtoError;
@@ -96,9 +99,9 @@ impl<S: AsyncRead + AsyncWrite + Send> Stream for TcpClientStream<S> {
                     warn!("{} does not match name_server: {}", message.addr(), peer)
                 }
 
-                Ok(Async::Ready(Some(message)))
+                Ok(Poll::Ready(Some(message)))
             }
-            None => Ok(Async::Ready(None)),
+            None => Ok(Poll::Ready(None)),
         }
     }
 }
@@ -121,7 +124,9 @@ use tokio_tcp::TcpStream as TokioTcpStream;
 #[cfg(feature = "tokio-compat")]
 impl Connect for TokioTcpStream {
     type Transport = TokioTcpStream;
-    type Future = tokio_tcp::ConnectFuture;
+    // TODO: changet Tokio's TcpStream to return a concrete type
+    type Future = impl Future<Output = io::Result<TokioTcpStream>>;
+    
     fn connect(addr: &SocketAddr) -> Self::Future {
         TokioTcpStream::connect(addr)
     }

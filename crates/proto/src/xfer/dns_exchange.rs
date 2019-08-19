@@ -7,9 +7,12 @@
 
 //! This module contains all the types for demuxing DNS oriented streams.
 
+use std::pin::Pin;
+use std::task::Context;
+
 use futures::stream::{Peekable, Stream};
-use futures::sync::mpsc::{unbounded, UnboundedReceiver};
-use futures::{Async, Future, Poll};
+use futures::{Future, Poll};
+use tokio_sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use crate::error::*;
 use crate::xfer::{DnsRequest, DnsRequestSender, DnsRequestStreamHandle, DnsResponse, OneshotDnsRequest};
@@ -40,7 +43,7 @@ where
     ///
     /// * `stream` - the established IO stream for communication
     pub fn from_stream(stream: S) -> (Self, DnsRequestStreamHandle<R>) {
-        let (message_sender, outbound_messages) = unbounded();
+        let (message_sender, outbound_messages) = unbounded_channel();
         let message_sender = DnsRequestStreamHandle::<R>::new(message_sender);
 
         let stream = Self::from_stream_with_receiver(stream, outbound_messages);
@@ -66,7 +69,7 @@ where
     where
         F: Future<Output = Result<S, ProtoError>> + 'static + Send,
     {
-        let (message_sender, outbound_messages) = unbounded();
+        let (message_sender, outbound_messages) = unbounded_channel();
         (
             DnsExchangeConnect::connect(connect_future, outbound_messages),
             DnsRequestStreamHandle::<R>::new(message_sender),
@@ -89,23 +92,23 @@ where
             // poll the underlying stream, to drive it...
             match self.io_stream.poll() {
                 // The stream is ready
-                Ok(Async::Ready(Some(()))) => (),
-                Ok(Async::NotReady) => {
+                Poll::Ready(Some(Ok(()))) => (),
+                Poll::Pending => {
                     if self.io_stream.is_shutdown() {
                         // the io_stream is in a shutdown state, we are only waiting for final results...
-                        return Ok(Async::NotReady);
+                        return Poll::Pending;
                     }
 
                     // NotReady and not shutdown, see if there are more messages to send
                     ()
                 } // underlying stream is complete.
-                Ok(Async::Ready(None)) => {
+                Poll::Ready(None) => {
                     debug!("io_stream is done, shutting down");
                     // TODO: return shutdown error to anything in the stream?
 
-                    return Ok(Async::Ready(()));
+                    return Poll::Ready(Some(Ok()));
                 }
-                Err(err) => return Err(err),
+                Err(err) => return Poll::Ready(Some(Err(err))),
             }
 
             // then see if there is more to send
@@ -115,7 +118,7 @@ where
                 .map_err(|()| ProtoError::from("unknown from outbound_message receiver"))?
             {
                 // already handled above, here to make sure the poll() pops the next message
-                Async::Ready(Some(dns_request)) => {
+                Poll::Ready(Some(dns_request)) => {
                     // if there is no peer, this connection should die...
                     let (dns_request, serial_response): (DnsRequest, _) = dns_request.unwrap();
 
@@ -132,8 +135,8 @@ where
                     }
                 }
                 // On not ready, this is our time to return...
-                Async::NotReady => return Ok(Async::NotReady),
-                Async::Ready(None) => {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => {
                     debug!("all handles closed, shutting down: {}", self.io_stream);
                     // if there is nothing that can use this connection to send messages, then this is done...
                     self.io_stream.shutdown();
@@ -217,17 +220,17 @@ where
                     ref mut outbound_messages,
                 } => {
                     match connect_future.poll() {
-                        Ok(Async::Ready(stream)) => {
+                        Poll::Ready(Ok(stream)) => {
                             debug!("connection established: {}", stream);
-                            return Ok(Async::Ready(DnsExchange::from_stream_with_receiver(
+                            return Poll::Ready(Ok(DnsExchange::from_stream_with_receiver(
                                 stream,
                                 outbound_messages
                                     .take()
                                     .expect("cannot poll after complete"),
                             )));
                         }
-                        Ok(Async::NotReady) => return Ok(Async::NotReady),
-                        Err(error) => {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(Err(error)) => {
                             debug!("stream errored while connecting: {:?}", error);
                             next = DnsExchangeConnectInner::FailAll {
                                 error,
@@ -243,16 +246,16 @@ where
                     ref mut outbound_messages,
                 } => {
                     while let Some(outbound_message) = match outbound_messages.poll() {
-                        Ok(Async::Ready(opt)) => opt,
-                        Ok(Async::NotReady) => return Ok(Async::NotReady),
-                        Err(_) => None,
+                        Poll::Ready(Ok(opt)) => opt,
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(Err(_)) => None,
                     } {
                         let response = S::error_response(error.clone());
                         // ignoring errors... best effort send...
                         outbound_message.unwrap().1.send_response(response).ok();
                     }
 
-                    return Err(error.clone());
+                    return Poll::Ready(Err(error.clone()));
                 }
             }
 

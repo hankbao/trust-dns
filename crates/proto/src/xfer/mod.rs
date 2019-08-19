@@ -6,12 +6,15 @@
 
 use std::fmt::{Debug, Display};
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::task::Context;
 
 use crate::error::*;
-use futures::sync::mpsc::{SendError, UnboundedSender};
-use futures::sync::oneshot;
 use futures::{Future, Poll, Stream};
 use crate::op::Message;
+use tokio_sync::mpsc::UnboundedSender;
+use tokio_sync::mpsc::error::UnboundedTrySendError;
+use tokio_sync::oneshot;
 
 mod dns_exchange;
 pub mod dns_handle;
@@ -63,9 +66,10 @@ impl BufStreamHandle {
         BufStreamHandle { sender }
     }
 
+    // FIXME: this might need to be try_unbounded_send, is this different semantics than before?
     /// see [`futures::sync::mpsc::UnboundedSender`]
-    pub fn unbounded_send(&self, msg: SerialMessage) -> Result<(), SendError<SerialMessage>> {
-        self.sender.unbounded_send(msg)
+    pub fn unbounded_send(&self, msg: SerialMessage) -> Result<(), UnboundedTrySendError<SerialMessage>> {
+        self.sender.try_unbounded_send(msg)
     }
 }
 
@@ -123,12 +127,13 @@ where
         DnsRequestStreamHandle { sender }
     }
 
+    // FIXME: does try send change the semantics this had before?
     /// see [`futures::sync::mpsc::UnboundedSender`]
     pub fn unbounded_send(
         &self,
         msg: OneshotDnsRequest<F>,
-    ) -> Result<(), SendError<OneshotDnsRequest<F>>> {
-        self.sender.unbounded_send(msg)
+    ) -> Result<(), UnboundedTrySendError<OneshotDnsRequest<F>>> {
+        self.sender.try_unbounded_send(msg)
     }
 }
 
@@ -166,7 +171,7 @@ pub trait DnsRequestSender:
 
     /// Allows the upstream user to inform the underling stream that it should shutdown.
     ///
-    /// After this is called, the next time `poll` is called on the stream it would be correct to return `Ok(Async::Ready(()))`. This is not required though, if there are say outstanding requests that are not yet complete, then it would be correct to first wait for those results.
+    /// After this is called, the next time `poll` is called on the stream it would be correct to return `Poll::Ready(Ok(()))`. This is not required though, if there are say outstanding requests that are not yet complete, then it would be correct to first wait for those results.
     fn shutdown(&mut self);
 
     /// Returns true if the stream has been shutdown with `shutdown`
@@ -218,7 +223,7 @@ macro_rules! try_oneshot {
 
 impl<F> DnsHandle for BufDnsRequestStreamHandle<F>
 where
-    F: Future<Output = Result<DnsResponse, ProtoError>> + Send + 'static,
+    F: Future<Output = Result<DnsResponse, ProtoError>> + Send + Unpin + 'static,
 {
     type Response = OneshotDnsResponseReceiver<F>;
 

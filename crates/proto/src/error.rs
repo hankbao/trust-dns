@@ -9,7 +9,7 @@
 
 #![deny(missing_docs)]
 
-use std::{fmt, io, pin::Pin, sync, task::Context};
+use std::{fmt, io, pin::Pin, sync, task};
 
 use crate::rr::{Name, RecordType};
 
@@ -294,26 +294,26 @@ impl From<TimerError> for ProtoError {
     }
 }
 
-impl From<tokio_timer::timeout::Error<ProtoError>> for ProtoError {
-    fn from(e: tokio_timer::timeout::Error<ProtoError>) -> Self {
-        if e.is_elapsed() {
-            return ProtoError::from(ProtoErrorKind::Timeout);
-        }
+// impl From<tokio_timer::Error<ProtoError>> for ProtoError {
+//     fn from(e: tokio_timer::Error<ProtoError>) -> Self {
+//         if e.is_elapsed() {
+//             return ProtoError::from(ProtoErrorKind::Timeout);
+//         }
 
-        if e.is_inner() {
-            return e.into_inner().expect("invalid state, not a ProtoError");
-        }
+//         if e.is_inner() {
+//             return e.into_inner().expect("invalid state, not a ProtoError");
+//         }
 
-        if e.is_timer() {
-            return ProtoError::from(
-                e.into_timer()
-                    .expect("invalid state, not a tokio_timer::Error"),
-            );
-        }
+//         if e.is_timer() {
+//             return ProtoError::from(
+//                 e.into_timer()
+//                     .expect("invalid state, not a tokio_timer::Error"),
+//             );
+//         }
 
-        ProtoError::from("unknown error with tokio_timer")
-    }
-}
+//         ProtoError::from("unknown error with tokio_timer")
+//     }
+// }
 
 impl From<::url::ParseError> for ProtoError {
     fn from(e: ::url::ParseError) -> ProtoError {
@@ -390,7 +390,7 @@ impl Clone for ProtoErrorKind {
     fn clone(&self) -> Self {
         use self::ProtoErrorKind::*;
         match *self {
-            Canceled(ref c) => Canceled(*c),
+            // Canceled(ref c) => Canceled(*c),
             CharacterDataTooLong { max, len } => CharacterDataTooLong { max, len },
             LabelOverlapsWithOther { label, other } => LabelOverlapsWithOther { label, other },
             DnsKeyProtocolNot3(protocol) => DnsKeyProtocolNot3(protocol),

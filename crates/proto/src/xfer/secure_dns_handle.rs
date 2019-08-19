@@ -332,9 +332,9 @@ impl Future for VerifyRrsetsFuture {
         loop {
             let remaining = match self.rrsets.poll() {
                 // one way the loop will stop, nothing is ready...
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Poll::Pending => return Poll::Pending,
                 // all rrsets verified! woop!
-                Ok(Async::Ready((rrset, _, remaining))) => {
+                Poll::Ready(Ok((rrset, _, remaining))) => {
                     debug!(
                         "an rrset was verified: {}, {:?}",
                         rrset.name, rrset.record_type
@@ -399,7 +399,7 @@ impl Future for VerifyRrsetsFuture {
                 message_result.insert_additionals(additionals);
 
                 // breaks out of the loop... and returns the filtered Message.
-                return Ok(Async::Ready(message_result));
+                return Poll::Ready(Ok(message_result));
             }
         }
     }

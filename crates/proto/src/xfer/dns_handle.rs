@@ -7,9 +7,9 @@
 
 //! `DnsHandle` types perform conversions of the raw DNS messages before sending the messages on the specified streams.
 
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
-use futures::{Future, IntoFuture};
+use futures::future::{Future, IntoFuture};
+use tokio_sync::mpsc::UnboundedSender;
+use tokio_sync::oneshot;
 use rand;
 
 use crate::error::*;
@@ -66,12 +66,12 @@ impl BasicDnsHandle {
 }
 
 impl DnsHandle for BasicDnsHandle {
-    type Response = Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send>;
+    type Response = Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send + Unpin>;
 
     fn send<R: Into<DnsRequest>>(
         &mut self,
         request: R,
-    ) -> Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send> {
+    ) -> Self::Response {
         let request = request.into();
         let (complete, receiver) = oneshot::channel();
         let message_sender: &mut _ = &mut self.message_sender;
@@ -102,7 +102,7 @@ impl DnsHandle for BasicDnsHandle {
 /// A trait for implementing high level functions of DNS.
 pub trait DnsHandle: 'static + Clone + Send {
     /// The associated response from the response future, this should resolve to the Response message
-    type Response: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send;
+    type Response: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send + Unpin;
 
     /// Only returns true if and only if this DNS handle is validating DNSSec.
     ///

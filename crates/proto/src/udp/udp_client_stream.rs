@@ -11,8 +11,10 @@ use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::pin::Pin;
+use std::task::Context;
 
-use futures::{Async, Future, Poll, Stream};
+use futures::{Future, Poll, Stream};
 use tokio_timer::Timeout;
 
 use crate::error::ProtoError;
@@ -185,9 +187,9 @@ impl<S: Send, MF: MessageFinalizer> Stream for UdpClientStream<S, MF> {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // Technically the Stream doesn't actually do anything.
         if self.is_shutdown {
-            Ok(Async::Ready(None))
+            Ok(Poll::Ready(None))
         } else {
-            Ok(Async::Ready(Some(())))
+            Ok(Poll::Ready(Some(())))
         }
     }
 }
@@ -234,7 +236,8 @@ impl<S: Send, MF: MessageFinalizer> Future for UdpClientConnect<S, MF> {
     type Output = Result<UdpClientStream<S, MF>, ProtoError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        Ok(Async::Ready(UdpClientStream::<S, MF> {
+        // TODO: this doesn't need to be a future?
+        Poll::Ready(Ok(UdpClientStream::<S, MF> {
             name_server: self
                 .name_server
                 .take()
@@ -356,7 +359,7 @@ impl<S: UdpSocket> Future for SingleUseUdpSocket<S> {
                 }
                 SingleUseUdpSocket::Response(ref mut response) => {
                     // finally return the message
-                    return Ok(Async::Ready(
+                    return Poll::Ready(Ok(
                         response
                             .take()
                             .expect("SingleUseUdpSocket::Send invalid state: already complete")

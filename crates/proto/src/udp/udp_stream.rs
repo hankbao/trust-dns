@@ -8,11 +8,13 @@
 use std::io;
 use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::pin::Pin;
+use std::task::Context;
 
 use futures::stream::{Fuse, Peekable, Stream};
-use futures::sync::mpsc::{unbounded, UnboundedReceiver};
+use tokio_sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use futures::task;
-use futures::{Async, Future, Poll};
+use futures::{Future, Poll};
 use rand;
 use rand::distributions::{uniform::Uniform, Distribution};
 
@@ -27,9 +29,9 @@ where
     fn bind(addr: &SocketAddr) -> io::Result<Self>;
     /// Receive data from the socket and returns the number of bytes read and the address from
     /// where the data came on success.
-    fn async recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)>;
+    fn recv_from(&mut self, buf: &mut [u8]) -> Poll<io::Result<(usize, SocketAddr)>>;
     /// Send data to the given address.
-    fn async send_to(&mut self, buf: &[u8], target: &SocketAddr) -> io::Result<usize>;
+    fn send_to(&mut self, buf: &[u8], target: &SocketAddr) -> Poll<io::Result<usize>>;
 }
 
 /// A UDP stream of DNS binary packets
@@ -59,7 +61,7 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
         Box<dyn Future<Output = Result<UdpStream<S>, io::Error>> + Send>,
         BufStreamHandle,
     ) {
-        let (message_sender, outbound_messages) = unbounded();
+        let (message_sender, outbound_messages) = unbounded_channel();
         let message_sender = BufStreamHandle::new(message_sender);
 
         // TODO: allow the bind address to be specified...
@@ -90,7 +92,7 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
     /// a tuple of a Future Stream which will handle sending and receiving messsages, and a
     ///  handle which can be used to send messages into the stream.
     pub fn with_bound(socket: S) -> (Self, BufStreamHandle) {
-        let (message_sender, outbound_messages) = unbounded();
+        let (message_sender, outbound_messages) = unbounded_channel();
         let message_sender = BufStreamHandle::new(message_sender);
 
         let stream = UdpStream {
@@ -126,13 +128,13 @@ impl<S: UdpSocket> Stream for UdpStream<S> {
                 .peek()
                 .map_err(|()| io::Error::new(io::ErrorKind::Other, "unknown"))?
             {
-                Async::Ready(Some(ref message)) => {
+                Poll::Ready(Some(ref message)) => {
                     // will return if the socket will block
                     try_ready!(self.socket.poll_send_to(message.bytes(), &message.addr()));
                 }
                 // now we get to drop through to the receives...
                 // TODO: should we also return None if there are no more messages to send?
-                Async::NotReady | Async::Ready(None) => break,
+                Poll::Pending | Poll::Ready(None) => break,
             }
 
             // now pop the request which is already sent
@@ -148,7 +150,7 @@ impl<S: UdpSocket> Stream for UdpStream<S> {
 
         // TODO: should we drop this packet if it's not from the same src as dest?
         let (len, src) = try_ready!(self.socket.poll_recv_from(&mut buf));
-        Ok(Async::Ready(Some(SerialMessage::new(
+        Poll::Ready(Some(Ok(SerialMessage::new(
             buf.iter().take(len).cloned().collect(),
             src,
         ))))
@@ -194,7 +196,7 @@ impl<S: UdpSocket> Future for NextRandomUdpSocket<S> {
             match S::bind(&zero_addr) {
                 Ok(socket) => {
                     debug!("created socket successfully");
-                    return Ok(Async::Ready(socket));
+                    return Poll::Ready(Ok(socket));
                 }
                 Err(err) => debug!("unable to bind port, attempt: {}: {}", attempt, err),
             }
@@ -202,9 +204,11 @@ impl<S: UdpSocket> Future for NextRandomUdpSocket<S> {
 
         debug!("could not get next random port, delaying");
 
-        task::current().notify();
+        // FIXME: this replaced task::current().notify();
+        cx.waker().wake_by_ref();
+
         // returning NotReady here, perhaps the next poll there will be some more socket available.
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
 
@@ -242,13 +246,13 @@ impl UdpSocket for tokio_udp::UdpSocket {
     fn bind(addr: &SocketAddr) -> io::Result<Self> {
         tokio_udp::UdpSocket::bind(addr)
     }
-    fn async recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+    fn recv_from(&mut self, buf: &mut [u8]) -> Poll<io::Result<(usize, SocketAddr)>> {
         self.recv_from(buf)
     }
-    fn async send_to(&mut self, buf: &[u8], target: &SocketAddr) -> io::Result<usize> {
+    fn send_to(&mut self, buf: &[u8], target: &SocketAddr) -> Poll<io::Result<usize>> {
         self.send_to(buf, target).map(|x| match x {
-            Async::Ready(_) => Async::Ready(()),
-            Async::NotReady => Async::NotReady,
+            Poll::Ready(_) => Poll::Ready(()),
+            Poll::Pending => Poll::Pending,
         })
     }
 }

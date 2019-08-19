@@ -11,12 +11,14 @@ use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::{self, Display};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Context;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::stream::Stream;
-use futures::sync::oneshot;
-use futures::{task, Async, Future, Poll};
+use tokio_sync::oneshot;
+use futures::{task, Future, Poll};
 use rand;
 use rand::distributions::{Distribution, Standard};
 use smallvec::SmallVec;
@@ -188,11 +190,11 @@ where
 
             // check for timeouts...
             match active_req.poll_timeout() {
-                Ok(Async::Ready(_)) => {
+                Poll::Ready(Ok(_)) => {
                     debug!("request timed out: {}", id);
                     canceled.insert(id, ProtoError::from(ProtoErrorKind::Timeout));
                 }
-                Ok(Async::NotReady) => (),
+                Poll::Pending => (),
                 Err(e) => {
                     error!("unexpected error from timeout: {}", e);
                     canceled.insert(id, ProtoError::from("error registering timeout"));
@@ -215,20 +217,22 @@ where
     }
 
     /// creates random query_id, validates against all active queries
-    fn next_random_query_id(&self) -> Async<u16> {
+    fn next_random_query_id(&self) -> Poll<u16> {
         let mut rand = rand::thread_rng();
 
         for _ in 0..100 {
             let id: u16 = Standard.sample(&mut rand); // the range is [0 ... u16::max]
 
             if !self.active_requests.contains_key(&id) {
-                return Async::Ready(id);
+                return Poll::Ready(id);
             }
         }
 
-        warn!("could not get next random query id, delaying");
-        task::current().notify();
-        Async::NotReady
+        // FIXME: need a Waker here, right?
+        panic!("could not get next random query id, delaying");
+        //task::current().notify();
+
+        Poll::Pending
     }
 
     /// Closes all outstanding completes with a closed stream error
@@ -279,7 +283,7 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let stream: S = try_ready!(self.stream.poll());
 
-        Ok(Async::Ready(DnsMultiplexer {
+        Poll::Ready(Ok(DnsMultiplexer {
             stream,
             timeout_duration: self.timeout_duration,
             stream_handle: self
@@ -317,8 +321,8 @@ where
 
         // get next query_id
         let query_id: u16 = match self.next_random_query_id() {
-            Async::Ready(id) => id,
-            Async::NotReady => {
+            Poll::Ready(id) => id,
+            Poll::Pending => {
                 return DnsMultiplexerSerialResponseInner::Err(Some(ProtoError::from(
                     "id space exhausted, consider filing an issue",
                 ))).into()
@@ -411,7 +415,7 @@ where
 
         if self.is_shutdown && self.active_requests.is_empty() {
             debug!("stream is done: {}", self);
-            return Ok(Async::Ready(None));
+            return Poll::Ready(None);
         }
 
         // Collect all inbound requests, max 100 at a time for QoS
@@ -420,7 +424,7 @@ where
         let mut messages_received = 0;
         for i in 0..QOS_MAX_RECEIVE_MSGS {
             match self.stream.poll()? {
-                Async::Ready(Some(buffer)) => {
+                Poll::Ready(Some(buffer)) => {
                     messages_received = i;
 
                     //   deserialize or log decode_error
@@ -448,12 +452,12 @@ where
                         Err(e) => debug!("error decoding message: {}", e),
                     }
                 }
-                Async::Ready(None) => {
+                Poll::Ready(None) => {
                     debug!("io_stream closed by other side: {}", self.stream);
                     self.stream_closed_close_all();
-                    return Ok(Async::Ready(None));
+                    return Poll::Ready(None);
                 }
-                Async::NotReady => break,
+                Poll::Pending => break,
             }
         }
 
@@ -461,11 +465,12 @@ where
         // was hit then "yield". This'll make sure that the future is
         // woken up immediately on the next turn of the event loop.
         if messages_received == QOS_MAX_RECEIVE_MSGS {
-            task::current().notify();
+            // FIXME: this was a task::current().notify(); is this right?
+            cx.waker().wake_by_ref();
         }
 
         // Finally, return not ready to keep the 'driver task' alive.
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
 
@@ -511,7 +516,7 @@ impl Future for DnsMultiplexerSerialResponseInner {
                     .poll()
                     .map_err(|_| ProtoError::from("the completion was canceled"))
             ) {
-                Ok(response) => Ok(Async::Ready(response)),
+                Ok(response) => Poll::Ready(Ok(response)),
                 Err(err) => Err(err),
             },
             DnsMultiplexerSerialResponseInner::Err(err) => {

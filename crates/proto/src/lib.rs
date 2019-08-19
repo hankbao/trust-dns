@@ -9,6 +9,9 @@
 #![warn(missing_docs)]
 #![recursion_limit = "2048"]
 
+#![feature(async_await)]
+#![feature(type_alias_impl_trait)]
+
 //! Trust-DNS Protocol library
 
 #[cfg(feature = "dnssec")]
@@ -39,12 +42,31 @@ extern crate tokio;
 extern crate tokio_executor;
 #[macro_use]
 extern crate tokio_io;
+extern crate tokio_sync;
 #[cfg(feature = "tokio-compat")]
 extern crate tokio_tcp;
 extern crate tokio_timer;
 #[cfg(feature = "tokio-compat")]
 extern crate tokio_udp;
 extern crate url;
+
+macro_rules! try_nb {
+    ($e:expr) => (match $e {
+        t @ Ok(_) => std::task::Poll::Ready(t),
+        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            return Ok(std::task::Poll::Pending)
+        }
+        e @ Err(_) => return std::task::Poll::Ready(e),
+    })
+}
+
+macro_rules! try_ready {
+    ($e:expr) => (match $e {
+        Poll::Ready(Ok(t)) => t,
+        p @ Poll::Pending => return p,
+        Poll::Ready(Err(e)) => return Poll::Ready(Err(From::from(e))),
+    })
+}
 
 pub mod error;
 #[cfg(feature = "mdns")]

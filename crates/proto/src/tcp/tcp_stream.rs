@@ -11,10 +11,12 @@ use std::io;
 use std::mem;
 use std::net::SocketAddr;
 use std::time::Duration;
+use std::pin::Pin;
+use std::task::Context;
 
 use futures::stream::{Fuse, Peekable, Stream};
-use futures::sync::mpsc::{unbounded, UnboundedReceiver};
-use futures::{Async, Future, Poll};
+use futures::{Future, Poll};
+use tokio_sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio_timer::Timeout;
 
 use crate::error::*;
@@ -125,7 +127,7 @@ impl<S: Connect + 'static> TcpStream<S> {
         Box<dyn Future<Output = Result<TcpStream<S::Transport>, io::Error>> + Send>,
         BufStreamHandle,
     ) {
-        let (message_sender, outbound_messages) = unbounded();
+        let (message_sender, outbound_messages) = unbounded_channel();
         let message_sender = BufStreamHandle::new(message_sender);
         // This set of futures collapses the next tcp socket into a stream which can be used for
         //  sending and receiving tcp packets.
@@ -168,7 +170,7 @@ impl<S> TcpStream<S> {
     /// * `stream` - the established IO stream for communication
     /// * `peer_addr` - sources address of the stream
     pub fn from_stream(stream: S, peer_addr: SocketAddr) -> (Self, BufStreamHandle) {
-        let (message_sender, outbound_messages) = unbounded();
+        let (message_sender, outbound_messages) = unbounded_channel();
         let message_sender = BufStreamHandle::new(message_sender);
 
         let stream = Self::from_stream_with_receiver(stream, peer_addr, outbound_messages);
@@ -272,7 +274,7 @@ impl<S: io::Read + io::Write> Stream for TcpStream<S> {
                     .map_err(|()| io::Error::new(io::ErrorKind::Other, "unknown"))?
                 {
                     // already handled above, here to make sure the poll() pops the next message
-                    Async::Ready(Some(message)) => {
+                    Poll::Ready(Some(message)) => {
                         // if there is no peer, this connection should die...
                         let (buffer, dst) = message.unwrap();
                         let peer = self.peer_addr;
@@ -302,8 +304,8 @@ impl<S: io::Read + io::Write> Stream for TcpStream<S> {
                     }
                     // now we get to drop through to the receives...
                     // TODO: should we also return None if there are no more messages to send?
-                    Async::NotReady => break,
-                    Async::Ready(None) => {
+                    Poll::Pending => break,
+                    Poll::Ready(None) => {
                         debug!("no messages to send");
                         break;
                     }
@@ -332,7 +334,7 @@ impl<S: io::Read + io::Write> Stream for TcpStream<S> {
 
                         if *pos == 0 {
                             // Since this is the start of the next message, we have a clean end
-                            return Ok(Async::Ready(None));
+                            return Ok(Poll::Ready(None));
                         } else {
                             return Err(io::Error::new(
                                 io::ErrorKind::BrokenPipe,
@@ -403,16 +405,16 @@ impl<S: io::Read + io::Write> Stream for TcpStream<S> {
             }
         }
 
-        // if the buffer is ready, return it, if not we're NotReady
+        // if the buffer is ready, return it, if not we're Pending
         if let Some(buffer) = ret_buf {
             debug!("returning buffer");
             let src_addr = self.peer_addr;
-            return Ok(Async::Ready(Some(SerialMessage::new(buffer, src_addr))));
+            return Ok(Poll::Ready(Some(SerialMessage::new(buffer, src_addr))));
         } else {
             debug!("bottomed out");
             // at a minimum the outbound_messages should have been polled,
             //  which will wake this future up later...
-            return Ok(Async::NotReady);
+            return Ok(Poll::Pending);
         }
     }
 }
