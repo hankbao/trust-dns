@@ -14,8 +14,8 @@ use std::time::Duration;
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::stream::{Fuse, Peekable, Stream};
-use futures::{Future, Poll};
+use futures::stream::{Fuse, Peekable, Stream, StreamExt};
+use futures::{Future, FutureExt, Poll, TryFutureExt};
 use tokio_sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio_timer::Timeout;
 
@@ -28,7 +28,7 @@ where
     Self: Sized,
 {
     /// TcpSteam
-    type Transport: io::Read + io::Write + Send;
+    type Transport: tokio_io::AsyncRead + tokio_io::AsyncWrite + Send;
     /// Future returned by connect
     type Future: Future<Output = Result<Self::Transport, io::Error>> + Send;
     /// connect to tcp
@@ -104,7 +104,8 @@ impl<S: Connect + 'static> TcpStream<S> {
     pub fn new<E>(
         name_server: SocketAddr,
     ) -> (
-        Box<dyn Future<Output = Result<TcpStream<S::Transport>, io::Error>> + Send>,
+        //Box<dyn Future<Output = Result<TcpStream<S::Transport>, io::Error>> + Send>,
+        impl Future<Output = Result<TcpStream<S::Transport>, io::Error>> + Send,
         BufStreamHandle,
     )
     where
@@ -124,7 +125,8 @@ impl<S: Connect + 'static> TcpStream<S> {
         name_server: SocketAddr,
         timeout: Duration,
     ) -> (
-        Box<dyn Future<Output = Result<TcpStream<S::Transport>, io::Error>> + Send>,
+        //Box<dyn Future<Output = Result<TcpStream<S::Transport>, io::Error>> + Send>,
+        impl Future<Output = Result<TcpStream<S::Transport>, io::Error>> + Send,
         BufStreamHandle,
     ) {
         let (message_sender, outbound_messages) = unbounded_channel();
@@ -132,17 +134,17 @@ impl<S: Connect + 'static> TcpStream<S> {
         // This set of futures collapses the next tcp socket into a stream which can be used for
         //  sending and receiving tcp packets.
         let tcp = S::connect(&name_server);
-        let stream = Timeout::new(tcp, timeout)
+        let stream_fut = Timeout::new(tcp, timeout)
             .map_err(move |e| {
                 debug!("timed out connecting to: {}", name_server);
-                e.into_inner().unwrap_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("timed out connecting to: {}", name_server),
-                    )
-                })
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("timed out connecting to: {}", name_server),
+                )
             })
-            .map(move |tcp_stream| {
+            .map(move |tcp_stream: Result<Result<S::Transport, io::Error>, _>| {
+                // FIXME: this unwrap is wrong, how do we flatten Result in this context?
+                tcp_stream.and_then(|tcp_stream| tcp_stream).map(|tcp_stream| {
                 debug!("TCP connection established to: {}", name_server);
                 TcpStream {
                     socket: tcp_stream,
@@ -154,9 +156,10 @@ impl<S: Connect + 'static> TcpStream<S> {
                     },
                     peer_addr: name_server,
                 }
+                })
             });
 
-        (Box::new(stream), message_sender)
+        (stream_fut, message_sender)
     }
 }
 
@@ -197,7 +200,7 @@ impl<S> TcpStream<S> {
     }
 }
 
-impl<S: io::Read + io::Write> Stream for TcpStream<S> {
+impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite> Stream for TcpStream<S> {
     type Item = io::Result<SerialMessage>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
@@ -214,18 +217,18 @@ impl<S: io::Read + io::Write> Stream for TcpStream<S> {
                         ref length,
                         ..
                     }) => {
-                        let wrote = try_nb!(self.socket.write(&length[*pos..]));
+                        let wrote = try_ready!(self.socket.poll_write(cx, &length[*pos..]));
                         *pos += wrote;
                     }
                     Some(WriteTcpState::Bytes {
                         ref mut pos,
                         ref bytes,
                     }) => {
-                        let wrote = try_nb!(self.socket.write(&bytes[*pos..]));
+                        let wrote = try_ready!(self.socket.poll_write(cx, &bytes[*pos..]));
                         *pos += wrote;
                     }
                     Some(WriteTcpState::Flushing) => {
-                        try_nb!(self.socket.flush());
+                        try_ready!(self.socket.try_flush(cx));
                     }
                     _ => (),
                 }
@@ -326,7 +329,7 @@ impl<S: io::Read + io::Write> Stream for TcpStream<S> {
                     ref mut bytes,
                 } => {
                     // debug!("reading length {}", bytes.len());
-                    let read = try_nb!(self.socket.read(&mut bytes[*pos..]));
+                    let read = try_ready!(self.socket.read(cx, &mut bytes[*pos..]));
                     if read == 0 {
                         // the Stream was closed!
                         debug!("zero bytes read, stream closed?");
@@ -363,7 +366,7 @@ impl<S: io::Read + io::Write> Stream for TcpStream<S> {
                     ref mut pos,
                     ref mut bytes,
                 } => {
-                    let read = try_nb!(self.socket.read(&mut bytes[*pos..]));
+                    let read = try_ready!(self.socket.read(cx, &mut bytes[*pos..]));
                     if read == 0 {
                         // the Stream was closed!
                         debug!("zero bytes read for message, stream closed?");

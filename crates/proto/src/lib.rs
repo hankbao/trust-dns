@@ -21,7 +21,6 @@ extern crate enum_as_inner;
 #[cfg(test)]
 extern crate env_logger;
 extern crate failure;
-#[macro_use]
 extern crate futures;
 extern crate idna;
 #[macro_use]
@@ -40,7 +39,6 @@ extern crate socket2;
 #[cfg(test)]
 extern crate tokio;
 extern crate tokio_executor;
-#[macro_use]
 extern crate tokio_io;
 extern crate tokio_sync;
 #[cfg(feature = "tokio-compat")]
@@ -50,21 +48,24 @@ extern crate tokio_timer;
 extern crate tokio_udp;
 extern crate url;
 
-macro_rules! try_nb {
-    ($e:expr) => (match $e {
-        t @ Ok(_) => std::task::Poll::Ready(t),
-        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-            return Ok(std::task::Poll::Pending)
+macro_rules! try_ready {
+    ($e:expr) => ({
+        match $e {
+            Poll::Ready(Ok(t)) => t,
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Err(e)) => return Poll::Ready(Err(From::from(e))),
         }
-        e @ Err(_) => return std::task::Poll::Ready(e),
     })
 }
 
-macro_rules! try_ready {
-    ($e:expr) => (match $e {
-        Poll::Ready(Ok(t)) => t,
-        p @ Poll::Pending => return p,
-        Poll::Ready(Err(e)) => return Poll::Ready(Err(From::from(e))),
+macro_rules! try_ready_stream {
+    ($e:expr) => ({
+        match $e {
+            Poll::Ready(Some(Ok(t))) => t,
+            Poll::Ready(None) => return Poll::Ready(None),
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(From::from(e)))),
+        }
     })
 }
 

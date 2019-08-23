@@ -182,7 +182,7 @@ where
 {
     type Output = Result<DnsExchange<S, R>, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.0.poll()
     }
 }
@@ -211,7 +211,7 @@ where
 {
     type Output = Result<DnsExchange<S, R>, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             let next;
             match self {

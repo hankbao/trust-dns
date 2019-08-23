@@ -9,7 +9,7 @@
 
 #![deny(missing_docs)]
 
-use std::{fmt, io, pin::Pin, sync, task};
+use std::{fmt, io, sync};
 
 use crate::rr::{Name, RecordType};
 
