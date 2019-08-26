@@ -11,10 +11,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::stream::{Fuse, Peekable, Stream};
-use tokio_sync::mpsc::{unbounded_channel, UnboundedReceiver};
-use futures::task;
-use futures::{Future, Poll};
+use futures::stream::{Fuse, Peekable, Stream, StreamExt};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver};
+use futures::{ready, Future, FutureExt, Poll, TryFutureExt};
 use rand;
 use rand::distributions::{uniform::Uniform, Distribution};
 
@@ -23,7 +22,7 @@ use crate::xfer::{BufStreamHandle, SerialMessage};
 /// Trait for UdpSocket
 pub trait UdpSocket
 where
-    Self: Sized,
+    Self: Sized + Unpin,
 {
     /// UdpSocket
     fn bind(addr: &SocketAddr) -> io::Result<Self>;
@@ -58,10 +57,10 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
     pub fn new(
         name_server: SocketAddr,
     ) -> (
-        Box<dyn Future<Output = Result<UdpStream<S>, io::Error>> + Send>,
+        Box<dyn Future<Output = Result<UdpStream<S>, io::Error>> + Send + Unpin>,
         BufStreamHandle,
     ) {
-        let (message_sender, outbound_messages) = unbounded_channel();
+        let (message_sender, outbound_messages) = unbounded();
         let message_sender = BufStreamHandle::new(message_sender);
 
         // TODO: allow the bind address to be specified...
@@ -70,7 +69,7 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
 
         // This set of futures collapses the next udp socket into a stream which can be used for
         //  sending and receiving udp packets.
-        let stream = Box::new(next_socket.map(move |socket| UdpStream {
+        let stream = Box::new(next_socket.map_ok(move |socket| UdpStream {
             socket,
             outbound_messages: outbound_messages.fuse().peekable(),
         }));
@@ -92,7 +91,7 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
     /// a tuple of a Future Stream which will handle sending and receiving messsages, and a
     ///  handle which can be used to send messages into the stream.
     pub fn with_bound(socket: S) -> (Self, BufStreamHandle) {
-        let (message_sender, outbound_messages) = unbounded_channel();
+        let (message_sender, outbound_messages) = unbounded();
         let message_sender = BufStreamHandle::new(message_sender);
 
         let stream = UdpStream {
@@ -119,18 +118,17 @@ impl<S: UdpSocket> Stream for UdpStream<S> {
     type Item = Result<SerialMessage, io::Error>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let outbound_messages = Pin::new(&mut self.outbound_messages);
+
         // this will not accept incoming data while there is data to send
         //  makes this self throttling.
         loop {
             // first try to send
-            match self
-                .outbound_messages
-                .peek()
-                .map_err(|()| io::Error::new(io::ErrorKind::Other, "unknown"))?
+            match outbound_messages.peek(cx)
             {
                 Poll::Ready(Some(ref message)) => {
                     // will return if the socket will block
-                    try_ready!(self.socket.poll_send_to(message.bytes(), &message.addr()));
+                    ready!(self.socket.send_to(message.bytes(), &message.addr()));
                 }
                 // now we get to drop through to the receives...
                 // TODO: should we also return None if there are no more messages to send?
@@ -139,7 +137,7 @@ impl<S: UdpSocket> Stream for UdpStream<S> {
 
             // now pop the request which is already sent
             // If it were an Err, it was returned on peeking.
-            self.outbound_messages.poll().expect("Impossible");
+            outbound_messages.poll_next(cx).is_ready();
         }
 
         // For QoS, this will only accept one message and output that
@@ -149,7 +147,7 @@ impl<S: UdpSocket> Stream for UdpStream<S> {
         let mut buf = [0u8; 2048];
 
         // TODO: should we drop this packet if it's not from the same src as dest?
-        let (len, src) = try_ready!(self.socket.poll_recv_from(&mut buf));
+        let (len, src) = ready!(self.socket.recv_from(&mut buf))?;
         Poll::Ready(Some(Ok(SerialMessage::new(
             buf.iter().take(len).cloned().collect(),
             src,
@@ -247,13 +245,17 @@ impl UdpSocket for tokio_udp::UdpSocket {
         tokio_udp::UdpSocket::bind(addr)
     }
     fn recv_from(&mut self, buf: &mut [u8]) -> Poll<io::Result<(usize, SocketAddr)>> {
-        self.recv_from(buf)
+        // FIXME: this needs to be updated!
+        //self.recv_from(buf)
+        Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "FIX THIS INTERFACE")))
     }
     fn send_to(&mut self, buf: &[u8], target: &SocketAddr) -> Poll<io::Result<usize>> {
-        self.send_to(buf, target).map(|x| match x {
-            Poll::Ready(_) => Poll::Ready(()),
-            Poll::Pending => Poll::Pending,
-        })
+        // FIXME: this needs to be updated!
+        // self.send_to(buf, target).map(|x| match x {
+        //     Poll::Ready(_) => Poll::Ready(()),
+        //     Poll::Pending => Poll::Pending,
+        // })
+        Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "FIX THIS INTERFACE")))
     }
 }
 
@@ -333,9 +335,9 @@ fn udp_stream_test(server_addr: IpAddr) {
         sender
             .unbounded_send(SerialMessage::new(test_bytes.to_vec(), server_addr))
             .unwrap();
-        let (buffer_and_addr, stream_tmp) = io_loop.block_on(stream.into_future()).ok().unwrap();
+        let (buffer_and_addr, stream_tmp) = io_loop.block_on(stream.into_future());
         stream = stream_tmp;
-        let message = buffer_and_addr.expect("no buffer received");
+        let message = buffer_and_addr.expect("no buffer received").expect("error receiving buffer");
         assert_eq!(message.bytes(), test_bytes);
         assert_eq!(message.addr(), server_addr);
     }

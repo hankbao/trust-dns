@@ -280,7 +280,7 @@ impl Stream for MdnsStream {
             let mut buf = [0u8; 2048];
 
             // TODO: should we drop this packet if it's not from the same src as dest?
-            let (len, src) = try_ready!(multicast.poll_recv_from(&mut buf));
+            let (len, src) = ready!(multicast.poll_recv_from(&mut buf));
             // now return the multicast
             return Poll::Ready(Some(Ok(SerialMessage::new(
                 buf.iter().take(len).cloned().collect(),

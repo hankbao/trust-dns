@@ -8,7 +8,7 @@
 //! `DnsHandle` types perform conversions of the raw DNS messages before sending the messages on the specified streams.
 
 use futures::future::{Future, IntoFuture};
-use tokio_sync::mpsc::UnboundedSender;
+use futures::channel::mpsc::UnboundedSender;
 use tokio_sync::oneshot;
 use rand;
 

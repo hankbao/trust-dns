@@ -48,16 +48,6 @@ extern crate tokio_timer;
 extern crate tokio_udp;
 extern crate url;
 
-macro_rules! try_ready {
-    ($e:expr) => ({
-        match $e {
-            Poll::Ready(Ok(t)) => t,
-            Poll::Pending => return Poll::Pending,
-            Poll::Ready(Err(e)) => return Poll::Ready(Err(From::from(e))),
-        }
-    })
-}
-
 macro_rules! try_ready_stream {
     ($e:expr) => ({
         match $e {

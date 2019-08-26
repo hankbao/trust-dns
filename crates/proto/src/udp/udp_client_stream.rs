@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::{Future, Poll, Stream};
+use futures::{ready, Future, Poll, Stream};
 use tokio_timer::Timeout;
 
 use crate::error::ProtoError;
@@ -187,9 +187,9 @@ impl<S: Send, MF: MessageFinalizer> Stream for UdpClientStream<S, MF> {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // Technically the Stream doesn't actually do anything.
         if self.is_shutdown {
-            Ok(Poll::Ready(None))
+            Poll::Ready(None)
         } else {
-            Ok(Poll::Ready(Some(())))
+            Poll::Ready(Some(Ok(())))
         }
     }
 }
@@ -216,7 +216,8 @@ impl<S: UdpSocket> Future for UdpResponse<S> {
     type Output = Result<DnsResponse, ProtoError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        self.0.poll().map_err(ProtoError::from)
+        let pinned_socket = Pin::new(&mut self.0);
+        pinned_socket.poll(cx).map_err(ProtoError::from).map(|r| r.and_then(|r| r))
     }
 }
 
@@ -254,6 +255,7 @@ enum SingleUseUdpSocket<S> {
     StartSend(Option<SerialMessage>, u16),
     Connect(Option<SerialMessage>, NextRandomUdpSocket<S>, u16),
     Send(Option<SerialMessage>, Option<S>, u16),
+    //SendFuture(Option<SerialMessage>, Option<S>, u16, Pin<Box<dyn Future<Output = io::Result<usize>> + Send + Unpin>>),
     AwaitResponse(Option<SerialMessage>, S, u16),
     Response(Option<Message>),
     Errored(Option<ProtoError>),
@@ -275,24 +277,25 @@ impl<S: UdpSocket> Future for SingleUseUdpSocket<S> {
                     SingleUseUdpSocket::Connect(msg, NextRandomUdpSocket::new(&name_server), msg_id)
                 }
                 SingleUseUdpSocket::Connect(ref mut msg, ref mut future_socket, msg_id) => {
-                    let socket = try_ready!(future_socket.poll());
+                    let future_socket = Pin::new(&mut future_socket);
+                    let socket = ready!(future_socket.poll(cx))?;
                     // TODO: connect the socket here on merge into master
 
                     // send the message, and then await the response
                     SingleUseUdpSocket::Send(msg.take(), Some(socket), msg_id)
                 }
                 SingleUseUdpSocket::Send(ref mut msg, ref mut socket, msg_id) => {
-                    try_ready!(socket
+                    ready!(socket
                         .as_mut()
                         .expect("SingleUseUdpSocket::Send invalid state: socket1")
-                        .poll_send_to(
+                        .send_to(
                             msg.as_ref()
                                 .expect("SingleUseUdpSocket::Send invalid state: msg1")
                                 .bytes(),
                             &msg.as_ref()
                                 .expect("SingleUseUdpSocket::Send invalid state: msg2")
                                 .addr()
-                        ));
+                        ))?;
 
                     // message is sent, await the response
                     SingleUseUdpSocket::AwaitResponse(
@@ -307,7 +310,7 @@ impl<S: UdpSocket> Future for SingleUseUdpSocket<S> {
                     // TODO: consider making this heap based? need to verify it matches EDNS settings
                     let mut buf = [0u8; 2048];
 
-                    let (len, src) = try_ready!(socket.poll_recv_from(&mut buf));
+                    let (len, src) = ready!(socket.recv_from(&mut buf))?;
                     let response = SerialMessage::new(buf.iter().take(len).cloned().collect(), src);
 
                     // compare expected src to received packet
@@ -368,9 +371,9 @@ impl<S: UdpSocket> Future for SingleUseUdpSocket<S> {
                 }
                 SingleUseUdpSocket::Errored(ref mut error) => {
                     // finally return the error
-                    return Err(error
+                    return Poll::Ready(Err(error
                         .take()
-                        .expect("SingleUseUdpSocket::Errored invalid state: already complete"));
+                        .expect("SingleUseUdpSocket::Errored invalid state: already complete")));
                 }
             }
         }

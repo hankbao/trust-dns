@@ -12,7 +12,7 @@ use std::time::Duration;
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::{Future, Poll, Stream};
+use futures::{Future, Poll, Stream, TryFutureExt};
 use tokio_io::{AsyncRead, AsyncWrite};
 
 use crate::error::ProtoError;
@@ -55,9 +55,9 @@ impl<S: Connect + 'static + Send> TcpClientStream<S> {
     ) -> (TcpClientConnect<S::Transport>, Box<dyn DnsStreamHandle + Send>) {
         let (stream_future, sender) = TcpStream::<S>::with_timeout(name_server, timeout);
 
-        let new_future = Box::new(
+        let new_future = Box::pin(
             stream_future
-                .map(move |tcp_stream| TcpClientStream { tcp_stream })
+                .map_ok(move |tcp_stream| TcpClientStream { tcp_stream })
                 .map_err(ProtoError::from),
         );
 
@@ -67,7 +67,7 @@ impl<S: Connect + 'static + Send> TcpClientStream<S> {
     }
 }
 
-impl<S> TcpClientStream<S> {
+impl<S: AsyncRead + AsyncWrite + Send> TcpClientStream<S> {
     /// Wraps the TcpStream in TcpClientStream
     pub fn from_stream(tcp_stream: TcpStream<S>) -> Self {
         TcpClientStream { tcp_stream }
@@ -80,41 +80,43 @@ impl<S: AsyncRead + AsyncWrite + Send> Display for TcpClientStream<S> {
     }
 }
 
-impl<S: AsyncRead + AsyncWrite + Send> DnsClientStream for TcpClientStream<S> {
+impl<S: AsyncRead + AsyncWrite + Send + Unpin> DnsClientStream for TcpClientStream<S> {
     fn name_server_addr(&self) -> SocketAddr {
         self.tcp_stream.peer_addr()
     }
 }
 
-impl<S: AsyncRead + AsyncWrite + Send> Stream for TcpClientStream<S> {
+impl<S: AsyncRead + AsyncWrite + Send + Unpin> Stream for TcpClientStream<S> {
     type Item = Result<SerialMessage, ProtoError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        match try_ready!(self.tcp_stream.poll().map_err(ProtoError::from)) {
-            Some(message) => {
-                // this is busted if the tcp connection doesn't have a peer
-                let peer = self.tcp_stream.peer_addr();
-                if message.addr() != peer {
-                    // FIXME: this should be an error...
-                    warn!("{} does not match name_server: {}", message.addr(), peer)
-                }
+        let tcp_stream = Pin::new(&mut self.tcp_stream);
+        let message = try_ready_stream!(tcp_stream.poll_next(cx));
 
-                Ok(Poll::Ready(Some(message)))
-            }
-            None => Ok(Poll::Ready(None)),
+        // this is busted if the tcp connection doesn't have a peer
+        let peer = self.tcp_stream.peer_addr();
+        if message.addr() != peer {
+            // FIXME: this should be an error...
+            warn!("{} does not match name_server: {}", message.addr(), peer)
         }
+
+        Poll::Ready(Some(Ok(message)))
     }
 }
 
 // TODO: create unboxed future for the TCP Stream
 /// A future that resolves to an TcpClientStream
-pub struct TcpClientConnect<S>(Box<dyn Future<Output = Result<TcpClientStream<S>, ProtoError>> + Send>);
+pub struct TcpClientConnect<S>(Pin<Box<dyn Future<Output = Result<TcpClientStream<S>, ProtoError>> + Send + Unpin + 'static>>);
 
 impl<S> Future for TcpClientConnect<S> {
     type Output = Result<TcpClientStream<S>, ProtoError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        self.0.poll()
+        self.0.as_mut().poll(cx)
+
+        // TODO: is there a way to do this without unsafe?
+        // let mut tcp_connect: &mut (dyn Future<Output = Result<TcpClientStream<S>, ProtoError>> + Send + Unpin + 'static)> = unsafe { Pin::new_unchecked(&mut self.0).as_mut() };
+        // tcp_connect.get_mut().poll(cx).map(|tcp_stream| TcpClientStream { tcp_stream })
     }
 }
 
@@ -161,6 +163,7 @@ const TEST_BYTES_LEN: usize = 8;
 #[cfg(test)]
 fn tcp_client_stream_test(server_addr: IpAddr) {
     use std::io::{Read, Write};
+    use futures::StreamExt;
     use tokio::runtime::current_thread::Runtime;
 
     let succeeded = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -244,11 +247,9 @@ fn tcp_client_stream_test(server_addr: IpAddr) {
             .send(SerialMessage::new(TEST_BYTES.to_vec(), server_addr))
             .expect("send failed");
         let (buffer, stream_tmp) = io_loop
-            .block_on(stream.into_future())
-            .ok()
-            .expect("future iteration run failed");
+            .block_on(stream.into_future());
         stream = stream_tmp;
-        let buffer = buffer.expect("no buffer received");
+        let buffer = buffer.expect("no buffer received").expect("error recieving buffer");
         assert_eq!(buffer.bytes(), TEST_BYTES);
     }
 

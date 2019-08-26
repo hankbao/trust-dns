@@ -9,12 +9,12 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::Context;
 
+use futures::{ready, Future, Poll, Stream};
+use futures::channel::mpsc::{UnboundedSender, TrySendError};
+use futures::channel::oneshot::{self, Receiver, Sender};
+
 use crate::error::*;
-use futures::{Future, Poll, Stream};
 use crate::op::Message;
-use tokio_sync::mpsc::UnboundedSender;
-use tokio_sync::mpsc::error::UnboundedTrySendError;
-use tokio_sync::oneshot;
 
 mod dns_exchange;
 pub mod dns_handle;
@@ -66,10 +66,9 @@ impl BufStreamHandle {
         BufStreamHandle { sender }
     }
 
-    // FIXME: this might need to be try_unbounded_send, is this different semantics than before?
     /// see [`futures::sync::mpsc::UnboundedSender`]
-    pub fn unbounded_send(&self, msg: SerialMessage) -> Result<(), UnboundedTrySendError<SerialMessage>> {
-        self.sender.try_unbounded_send(msg)
+    pub fn unbounded_send(&self, msg: SerialMessage) -> Result<(), TrySendError<SerialMessage>> {
+        self.sender.unbounded_send(msg)
     }
 }
 
@@ -132,8 +131,8 @@ where
     pub fn unbounded_send(
         &self,
         msg: OneshotDnsRequest<F>,
-    ) -> Result<(), UnboundedTrySendError<OneshotDnsRequest<F>>> {
-        self.sender.try_unbounded_send(msg)
+    ) -> Result<(), TrySendError<OneshotDnsRequest<F>>> {
+        self.sender.unbounded_send(msg)
     }
 }
 
@@ -248,7 +247,7 @@ where
     F: Future<Output = Result<DnsResponse, ProtoError>> + Send,
 {
     dns_request: DnsRequest,
-    sender_for_response: oneshot::Sender<F>,
+    sender_for_response: Sender<F>,
 }
 
 impl<F> OneshotDnsRequest<F>
@@ -291,10 +290,10 @@ where
 /// A Future that wraps a oneshot::Receiver and resolves to the final value
 pub enum OneshotDnsResponseReceiver<F>
 where
-    F: Future<Output = Result<DnsResponse, ProtoError>> + Send,
+    F: Future<Output = Result<DnsResponse, ProtoError>> + Send + Unpin,
 {
     /// The receiver
-    Receiver(oneshot::Receiver<F>),
+    Receiver(Receiver<F>),
     /// The future once received
     Received(F),
     /// Error during the send operation
@@ -310,13 +309,17 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             let future;
-            match self {
+            match *self {
                 OneshotDnsResponseReceiver::Receiver(ref mut receiver) => {
-                    future = try_ready!(receiver
-                        .poll()
+                    let receiver = Pin::new(receiver);
+                    future = ready!(receiver
+                        .poll(cx)
                         .map_err(|_| ProtoError::from("receiver was canceled")));
                 }
-                OneshotDnsResponseReceiver::Received(ref mut future) => return future.poll(),
+                OneshotDnsResponseReceiver::Received(ref mut future) => {
+                    let future = Pin::new(future);
+                    return future.poll(cx)
+                }
                 OneshotDnsResponseReceiver::Err(err) => {
                     return Err(err
                         .take()

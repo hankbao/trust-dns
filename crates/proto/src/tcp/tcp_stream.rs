@@ -14,9 +14,9 @@ use std::time::Duration;
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::stream::{Fuse, Peekable, Stream, StreamExt};
-use futures::{Future, FutureExt, Poll, TryFutureExt};
-use tokio_sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use futures::stream::{Fuse, Peekable, Stream, StreamExt, TryStreamExt};
+use futures::{ready, Future, FutureExt, Poll, TryFutureExt};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use tokio_timer::Timeout;
 
 use crate::error::*;
@@ -30,7 +30,7 @@ where
     /// TcpSteam
     type Transport: tokio_io::AsyncRead + tokio_io::AsyncWrite + Send;
     /// Future returned by connect
-    type Future: Future<Output = Result<Self::Transport, io::Error>> + Send;
+    type Future: Future<Output = Result<Self::Transport, io::Error>> + Send + Unpin;
     /// connect to tcp
     fn connect(addr: &SocketAddr) -> Self::Future;
 }
@@ -129,7 +129,7 @@ impl<S: Connect + 'static> TcpStream<S> {
         impl Future<Output = Result<TcpStream<S::Transport>, io::Error>> + Send,
         BufStreamHandle,
     ) {
-        let (message_sender, outbound_messages) = unbounded_channel();
+        let (message_sender, outbound_messages) = unbounded();
         let message_sender = BufStreamHandle::new(message_sender);
         // This set of futures collapses the next tcp socket into a stream which can be used for
         //  sending and receiving tcp packets.
@@ -163,7 +163,7 @@ impl<S: Connect + 'static> TcpStream<S> {
     }
 }
 
-impl<S> TcpStream<S> {
+impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite> TcpStream<S> {
     /// Initializes a TcpStream.
     ///
     /// This is intended for use with a TcpListener and Incoming.
@@ -173,7 +173,7 @@ impl<S> TcpStream<S> {
     /// * `stream` - the established IO stream for communication
     /// * `peer_addr` - sources address of the stream
     pub fn from_stream(stream: S, peer_addr: SocketAddr) -> (Self, BufStreamHandle) {
-        let (message_sender, outbound_messages) = unbounded_channel();
+        let (message_sender, outbound_messages) = unbounded();
         let message_sender = BufStreamHandle::new(message_sender);
 
         let stream = Self::from_stream_with_receiver(stream, peer_addr, outbound_messages);
@@ -200,10 +200,13 @@ impl<S> TcpStream<S> {
     }
 }
 
-impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite> Stream for TcpStream<S> {
+impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite + Unpin> Stream for TcpStream<S> {
     type Item = io::Result<SerialMessage>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let socket = Pin::new(&mut self.socket);
+        let outbound_messages = Pin::new(&mut self.outbound_messages);
+
         // this will not accept incoming data while there is data to send
         //  makes this self throttling.
         // TODO: it might be interesting to try and split the sending and receiving futures.
@@ -217,18 +220,18 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite> Stream for TcpStream<S> {
                         ref length,
                         ..
                     }) => {
-                        let wrote = try_ready!(self.socket.poll_write(cx, &length[*pos..]));
+                        let wrote = ready!(socket.poll_write(cx, &length[*pos..]))?;
                         *pos += wrote;
                     }
                     Some(WriteTcpState::Bytes {
                         ref mut pos,
                         ref bytes,
                     }) => {
-                        let wrote = try_ready!(self.socket.poll_write(cx, &bytes[*pos..]));
+                        let wrote = ready!(socket.poll_write(cx, &bytes[*pos..]))?;
                         *pos += wrote;
                     }
                     Some(WriteTcpState::Flushing) => {
-                        try_ready!(self.socket.try_flush(cx));
+                        ready!(socket.poll_flush(cx))?;
                     }
                     _ => (),
                 }
@@ -271,10 +274,9 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite> Stream for TcpStream<S> {
                 };
             } else {
                 // then see if there is more to send
-                match self
-                    .outbound_messages
-                    .poll()
-                    .map_err(|()| io::Error::new(io::ErrorKind::Other, "unknown"))?
+                match outbound_messages
+                    .poll_next(cx)
+                    // .map_err(|()| io::Error::new(io::ErrorKind::Other, "unknown"))?
                 {
                     // already handled above, here to make sure the poll() pops the next message
                     Poll::Ready(Some(message)) => {
@@ -285,10 +287,10 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite> Stream for TcpStream<S> {
                         // This is an error if the destination is not our peer (this is TCP after all)
                         //  This will kill the connection...
                         if peer != dst {
-                            return Err(io::Error::new(
+                            return Poll::Ready(Some(Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
                                 format!("mismatched peer: {} and dst: {}", peer, dst),
-                            ));
+                            ))));
                         }
 
                         // will return if the socket will block
@@ -329,7 +331,7 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite> Stream for TcpStream<S> {
                     ref mut bytes,
                 } => {
                     // debug!("reading length {}", bytes.len());
-                    let read = try_ready!(self.socket.read(cx, &mut bytes[*pos..]));
+                    let read = ready!(socket.poll_read(cx, &mut bytes[*pos..]))?;
                     if read == 0 {
                         // the Stream was closed!
                         debug!("zero bytes read, stream closed?");
@@ -337,12 +339,12 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite> Stream for TcpStream<S> {
 
                         if *pos == 0 {
                             // Since this is the start of the next message, we have a clean end
-                            return Ok(Poll::Ready(None));
+                            return Poll::Ready(None);
                         } else {
-                            return Err(io::Error::new(
+                            return Poll::Ready(Some(Err(io::Error::new(
                                 io::ErrorKind::BrokenPipe,
                                 "closed while reading length",
-                            ));
+                            ))));
                         }
                     }
                     debug!("in ReadTcpState::LenBytes: {}", pos);
@@ -366,17 +368,17 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite> Stream for TcpStream<S> {
                     ref mut pos,
                     ref mut bytes,
                 } => {
-                    let read = try_ready!(self.socket.read(cx, &mut bytes[*pos..]));
+                    let read = ready!(socket.poll_read(cx, &mut bytes[*pos..]))?;
                     if read == 0 {
                         // the Stream was closed!
                         debug!("zero bytes read for message, stream closed?");
 
                         // Since this is the start of the next message, we have a clean end
                         // try!(self.socket.shutdown(Shutdown::Both));  // TODO: add generic shutdown function
-                        return Err(io::Error::new(
+                        return Poll::Ready(Some(Err(io::Error::new(
                             io::ErrorKind::BrokenPipe,
                             "closed while reading message",
-                        ));
+                        ))));
                     }
 
                     debug!("in ReadTcpState::Bytes: {}", bytes.len());
@@ -412,12 +414,12 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite> Stream for TcpStream<S> {
         if let Some(buffer) = ret_buf {
             debug!("returning buffer");
             let src_addr = self.peer_addr;
-            return Ok(Poll::Ready(Some(SerialMessage::new(buffer, src_addr))));
+            return Poll::Ready(Some(Ok(SerialMessage::new(buffer, src_addr))));
         } else {
             debug!("bottomed out");
             // at a minimum the outbound_messages should have been polled,
             //  which will wake this future up later...
-            return Ok(Poll::Pending);
+            return Poll::Pending;
         }
     }
 }
@@ -534,11 +536,9 @@ fn tcp_client_stream_test(server_addr: IpAddr) {
             .unbounded_send(SerialMessage::new(TEST_BYTES.to_vec(), server_addr))
             .expect("send failed");
         let (buffer, stream_tmp) = io_loop
-            .block_on(stream.into_future())
-            .ok()
-            .expect("future iteration run failed");
+            .block_on(stream.into_future());
         stream = stream_tmp;
-        let message = buffer.expect("no buffer received");
+        let message = buffer.expect("no buffer received").expect("error receiving buffer");
         assert_eq!(message.bytes(), TEST_BYTES);
     }
 

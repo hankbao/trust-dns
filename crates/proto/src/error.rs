@@ -25,6 +25,7 @@ use ring::error::Unspecified;
 use failure::{Backtrace, Context, Fail};
 use tokio_executor::SpawnError;
 use tokio_timer::Error as TimerError;
+use tokio_timer::timeout::Elapsed;
 
 /// An alias for results returned by functions of this crate
 pub type ProtoResult<T> = ::std::result::Result<T, ProtoError>;
@@ -183,6 +184,10 @@ pub enum ProtoErrorKind {
     #[fail(display = "request timed out")]
     Timeout,
 
+    /// A request timeout elapsed
+    #[fail(display = "request time elapsed before data received")]
+    Elapsed,
+
     /// An url parsing error
     #[fail(display = "url parsing error")]
     UrlParsing,
@@ -291,6 +296,12 @@ impl From<SslErrorStack> for ProtoError {
 impl From<TimerError> for ProtoError {
     fn from(e: TimerError) -> ProtoError {
         e.context(ProtoErrorKind::Timer).into()
+    }
+}
+
+impl From<Elapsed> for ProtoError {
+    fn from(e: Elapsed) -> ProtoError {
+        e.context(ProtoErrorKind::Elapsed).into()
     }
 }
 

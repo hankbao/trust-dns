@@ -10,9 +10,9 @@
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::stream::{Peekable, Stream};
+use futures::stream::Peekable;
 use futures::{Future, Poll};
-use tokio_sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 
 use crate::error::*;
 use crate::xfer::{DnsRequest, DnsRequestSender, DnsRequestStreamHandle, DnsResponse, OneshotDnsRequest};
@@ -43,7 +43,7 @@ where
     ///
     /// * `stream` - the established IO stream for communication
     pub fn from_stream(stream: S) -> (Self, DnsRequestStreamHandle<R>) {
-        let (message_sender, outbound_messages) = unbounded_channel();
+        let (message_sender, outbound_messages) = unbounded();
         let message_sender = DnsRequestStreamHandle::<R>::new(message_sender);
 
         let stream = Self::from_stream_with_receiver(stream, outbound_messages);
@@ -69,7 +69,7 @@ where
     where
         F: Future<Output = Result<S, ProtoError>> + 'static + Send,
     {
-        let (message_sender, outbound_messages) = unbounded_channel();
+        let (message_sender, outbound_messages) = unbounded();
         (
             DnsExchangeConnect::connect(connect_future, outbound_messages),
             DnsRequestStreamHandle::<R>::new(message_sender),

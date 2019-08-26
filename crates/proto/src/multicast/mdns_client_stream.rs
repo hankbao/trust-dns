@@ -90,7 +90,7 @@ impl Stream for MdnsClientStream {
     type Error = ProtoError;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        match try_ready!(self.mdns_stream.poll().map_err(ProtoError::from)) {
+        match ready!(self.mdns_stream.poll().map_err(ProtoError::from)) {
             Some(serial_message) => {
                 // TODO: for mDNS queries could come from anywhere. It's not clear that there is anything
                 //       we can validate in this case.

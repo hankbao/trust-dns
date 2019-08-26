@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::stream::Stream;
 use tokio_sync::oneshot;
-use futures::{task, Future, Poll};
+use futures::{ready, Future, Poll};
 use rand;
 use rand::distributions::{Distribution, Standard};
 use smallvec::SmallVec;
@@ -281,7 +281,7 @@ where
     type Output = Result<DnsMultiplexer<S, MF, Box<dyn DnsStreamHandle>>, ProtoError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let stream: S = try_ready!(self.stream.poll());
+        let stream: S = ready!(self.stream.poll());
 
         Poll::Ready(Ok(DnsMultiplexer {
             stream,
@@ -511,7 +511,7 @@ impl Future for DnsMultiplexerSerialResponseInner {
         match self {
             // The inner type of the completion might have been an error
             //   we need to unwrap that, and translate to be the Future's error
-            DnsMultiplexerSerialResponseInner::Completion(complete) => match try_ready!(
+            DnsMultiplexerSerialResponseInner::Completion(complete) => match ready!(
                 complete
                     .poll()
                     .map_err(|_| ProtoError::from("the completion was canceled"))
