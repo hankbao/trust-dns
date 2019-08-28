@@ -10,7 +10,7 @@
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::stream::Peekable;
+use futures::stream::{Peekable, Stream, StreamExt};
 use futures::{Future, Poll};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 
@@ -67,7 +67,7 @@ where
     /// The connect_future should be lazy.
     pub fn connect<F>(connect_future: F) -> (DnsExchangeConnect<F, S, R>, DnsRequestStreamHandle<R>)
     where
-        F: Future<Output = Result<S, ProtoError>> + 'static + Send,
+        F: Future<Output = Result<S, ProtoError>> + 'static + Send + Unpin,
     {
         let (message_sender, outbound_messages) = unbounded();
         (
@@ -86,11 +86,14 @@ where
 
     #[allow(clippy::unused_unit)]
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let io_stream = Pin::new(&mut self.io_stream);
+        let outbound_messages = Pin::new(&mut self.outbound_messages);
+
         // this will not accept incoming data while there is data to send
         //  makes this self throttling.
         loop {
             // poll the underlying stream, to drive it...
-            match self.io_stream.poll() {
+            match io_stream.poll_next(cx) {
                 // The stream is ready
                 Poll::Ready(Some(Ok(()))) => (),
                 Poll::Pending => {
@@ -106,16 +109,13 @@ where
                     debug!("io_stream is done, shutting down");
                     // TODO: return shutdown error to anything in the stream?
 
-                    return Poll::Ready(Some(Ok()));
+                    return Poll::Ready(Ok(()));
                 }
-                Err(err) => return Poll::Ready(Some(Err(err))),
+                Poll::Ready(Some(Err(err))) => return Poll::Ready(Err(err)),
             }
 
             // then see if there is more to send
-            match self
-                .outbound_messages
-                .poll()
-                .map_err(|()| ProtoError::from("unknown from outbound_message receiver"))?
+            match outbound_messages.poll_next(cx)
             {
                 // already handled above, here to make sure the poll() pops the next message
                 Poll::Ready(Some(dns_request)) => {
@@ -128,9 +128,9 @@ where
                         Ok(()) => (),
                         Err(_) => {
                             warn!("failed to associate send_message response to the sender");
-                            return Err(
+                            return Poll::Ready(Err(
                                 "failed to associate send_message response to the sender".into()
-                            );
+                            ));
                         }
                     }
                 }
@@ -153,13 +153,13 @@ where
 /// A wrapper for a future DnsExchange connection
 pub struct DnsExchangeConnect<F, S, R>(DnsExchangeConnectInner<F, S, R>)
 where
-    F: Future<Output = Result<S, ProtoError>> + 'static + Send,
+    F: Future<Output = Result<S, ProtoError>> + 'static + Send + Unpin,
     S: DnsRequestSender<DnsResponseFuture = R>,
     R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send;
 
 impl<F, S, R> DnsExchangeConnect<F, S, R>
 where
-    F: Future<Output = Result<S, ProtoError>> + 'static + Send,
+    F: Future<Output = Result<S, ProtoError>> + 'static + Send + Unpin,
     S: DnsRequestSender<DnsResponseFuture = R>,
     R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send,
 {
@@ -176,14 +176,15 @@ where
 
 impl<F, S, R> Future for DnsExchangeConnect<F, S, R>
 where
-    F: Future<Output = Result<S, ProtoError>> + 'static + Send,
+    F: Future<Output = Result<S, ProtoError>> + 'static + Send + Unpin,
     S: DnsRequestSender<DnsResponseFuture = R>,
     R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send,
 {
     type Output = Result<DnsExchange<S, R>, ProtoError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        self.0.poll()
+        let future = Pin::new(&mut self.0);
+        future.poll(cx)
     }
 }
 
@@ -205,7 +206,7 @@ where
 
 impl<F, S, R> Future for DnsExchangeConnectInner<F, S, R>
 where
-    F: Future<Output = Result<S, ProtoError>> + 'static + Send,
+    F: Future<Output = Result<S, ProtoError>> + 'static + Send + Unpin,
     S: DnsRequestSender<DnsResponseFuture = R>,
     R: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send,
 {
@@ -214,12 +215,13 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             let next;
-            match self {
+            match *self {
                 DnsExchangeConnectInner::Connecting {
                     ref mut connect_future,
                     ref mut outbound_messages,
                 } => {
-                    match connect_future.poll() {
+                    let connect_future = Pin::new(connect_future);
+                    match connect_future.poll(cx) {
                         Poll::Ready(Ok(stream)) => {
                             debug!("connection established: {}", stream);
                             return Poll::Ready(Ok(DnsExchange::from_stream_with_receiver(
@@ -242,13 +244,13 @@ where
                     };
                 }
                 DnsExchangeConnectInner::FailAll {
-                    error,
+                    ref error,
                     ref mut outbound_messages,
                 } => {
-                    while let Some(outbound_message) = match outbound_messages.poll() {
-                        Poll::Ready(Ok(opt)) => opt,
+                    let outbound_messages = Pin::new(outbound_messages);
+                    while let Some(outbound_message) = match outbound_messages.poll_next(cx) {
+                        Poll::Ready(opt) => opt,
                         Poll::Pending => return Poll::Pending,
-                        Poll::Ready(Err(_)) => None,
                     } {
                         let response = S::error_response(error.clone());
                         // ignoring errors... best effort send...

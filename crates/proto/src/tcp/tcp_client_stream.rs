@@ -12,7 +12,7 @@ use std::time::Duration;
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::{Future, Poll, Stream, TryFutureExt};
+use futures::{Future, Poll, Stream, TryFutureExt, StreamExt};
 use tokio_io::{AsyncRead, AsyncWrite};
 
 use crate::error::ProtoError;
@@ -89,9 +89,8 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin> DnsClientStream for TcpClientStre
 impl<S: AsyncRead + AsyncWrite + Send + Unpin> Stream for TcpClientStream<S> {
     type Item = Result<SerialMessage, ProtoError>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let tcp_stream = Pin::new(&mut self.tcp_stream);
-        let message = try_ready_stream!(tcp_stream.poll_next(cx));
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let message = try_ready_stream!(self.tcp_stream.poll_next_unpin(cx));
 
         // this is busted if the tcp connection doesn't have a peer
         let peer = self.tcp_stream.peer_addr();
@@ -111,13 +110,9 @@ pub struct TcpClientConnect<S>(Pin<Box<dyn Future<Output = Result<TcpClientStrea
 impl<S> Future for TcpClientConnect<S> {
     type Output = Result<TcpClientStream<S>, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.0.as_mut().poll(cx)
-
-        // TODO: is there a way to do this without unsafe?
-        // let mut tcp_connect: &mut (dyn Future<Output = Result<TcpClientStream<S>, ProtoError>> + Send + Unpin + 'static)> = unsafe { Pin::new_unchecked(&mut self.0).as_mut() };
-        // tcp_connect.get_mut().poll(cx).map(|tcp_stream| TcpClientStream { tcp_stream })
-    }
+     }
 }
 
 #[cfg(feature = "tokio-compat")]

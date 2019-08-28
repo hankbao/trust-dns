@@ -40,7 +40,7 @@ impl<H: DnsHandle> RetryDnsHandle<H> {
 
 impl<H> DnsHandle for RetryDnsHandle<H>
 where
-    H: DnsHandle + 'static,
+    H: DnsHandle + Unpin + 'static,
 {
     type Response = Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send + Unpin>;
 
@@ -72,14 +72,15 @@ impl<H: DnsHandle> Future for RetrySendFuture<H> {
     type Output = Result<DnsResponse, ProtoError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let future = Pin::new(&mut self.future);
+
         // loop over the future, on errors, spawn a new future
         //  on ready and not ready return.
         loop {
-            match self.future.poll() {
-                r @ Ok(_) => return r,
-                Err(e) => {
+            match future.poll(cx) {
+                Poll::Ready(Err(e)) => {
                     if self.remaining_attempts == 0 {
-                        return Err(e);
+                        return Poll::Ready(Err(e));
                     }
 
                     self.remaining_attempts -= 1;
@@ -87,6 +88,7 @@ impl<H: DnsHandle> Future for RetrySendFuture<H> {
                     //  then we can just reuse it... and no clone necessary
                     self.future = self.handle.send(self.request.clone());
                 }
+                poll => return poll,
             }
         }
     }
@@ -98,6 +100,7 @@ mod test {
     use crate::error::*;
     use futures::*;
     use futures::future::*;
+    use futures::executor::block_on;
     use crate::op::*;
     use std::cell::Cell;
     use DnsHandle;
@@ -137,7 +140,7 @@ mod test {
             2,
         );
         let test1 = Message::new();
-        let result = handle.send(test1).wait().expect("should have succeeded");
+        let result = block_on(handle.send(test1)).expect("should have succeeded");
         assert_eq!(result.id(), 1); // this is checking the number of iterations the TestClient ran
     }
 
@@ -152,6 +155,6 @@ mod test {
             2,
         );
         let test1 = Message::new();
-        assert!(client.send(test1).wait().is_err());
+        assert!(block_on(client.send(test1)).is_err());
     }
 }

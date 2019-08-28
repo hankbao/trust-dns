@@ -153,7 +153,7 @@ where
 ///   NotReady, if it is not ready to send a message, and `Err` or `None` in the case that the stream is
 ///   done, and should be shutdown.
 pub trait DnsRequestSender:
-    Stream<Item = Result<(), ProtoError>> + 'static + Display + Send
+    Stream<Item = Result<(), ProtoError>> + 'static + Display + Send + Unpin
 {
     /// A future that resolves to a response serial message
     type DnsResponseFuture: Future<Output = Result<DnsResponse, ProtoError>> + 'static + Send;
@@ -302,32 +302,30 @@ where
 
 impl<F> Future for OneshotDnsResponseReceiver<F>
 where
-    F: Future<Output = Result<DnsResponse, ProtoError>> + Send,
+    F: Future<Output = Result<DnsResponse, ProtoError>> + Send + Unpin,
 {
     type Output = <F as Future>::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
-            let future;
-            match *self {
+            *self = match *self {
                 OneshotDnsResponseReceiver::Receiver(ref mut receiver) => {
                     let receiver = Pin::new(receiver);
-                    future = ready!(receiver
+                    let future = ready!(receiver
                         .poll(cx)
-                        .map_err(|_| ProtoError::from("receiver was canceled")));
+                        .map_err(|_| ProtoError::from("receiver was canceled")))?;
+                    OneshotDnsResponseReceiver::Received(future)
                 }
                 OneshotDnsResponseReceiver::Received(ref mut future) => {
                     let future = Pin::new(future);
                     return future.poll(cx)
                 }
                 OneshotDnsResponseReceiver::Err(err) => {
-                    return Err(err
+                    return Poll::Ready(Err(err
                         .take()
-                        .expect("futures should not be polled after complete"))
+                        .expect("futures should not be polled after complete")))
                 }
-            }
-
-            *self = OneshotDnsResponseReceiver::Received(future);
+            };
         }
     }
 }

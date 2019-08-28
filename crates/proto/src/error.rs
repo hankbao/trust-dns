@@ -34,8 +34,8 @@ pub type ProtoResult<T> = ::std::result::Result<T, ProtoError>;
 #[derive(Eq, PartialEq, Debug, Fail)]
 pub enum ProtoErrorKind {
     /// An error caused by a canceled future
-    // #[fail(display = "future was canceled: {:?}", _0)]
-    // Canceled(::tokio::sync::oneshot::Canceled),
+    #[fail(display = "future was canceled: {:?}", _0)]
+    Canceled(futures::channel::oneshot::Canceled),
 
     /// Character data length exceeded the limit
     #[fail(display = "char data length exceeds {}: {}", _0, _1)]
@@ -401,12 +401,13 @@ impl Clone for ProtoErrorKind {
     fn clone(&self) -> Self {
         use self::ProtoErrorKind::*;
         match *self {
-            // Canceled(ref c) => Canceled(*c),
+            Canceled(ref c) => Canceled(*c),
             CharacterDataTooLong { max, len } => CharacterDataTooLong { max, len },
             LabelOverlapsWithOther { label, other } => LabelOverlapsWithOther { label, other },
             DnsKeyProtocolNot3(protocol) => DnsKeyProtocolNot3(protocol),
             DomainNameTooLong(len) => DomainNameTooLong(len),
             EdnsNameNotRoot(ref found) => EdnsNameNotRoot(found.clone()),
+            Elapsed => Elapsed,
             IncorrectRDataLengthRead { read, len } => IncorrectRDataLengthRead { read, len },
             LabelBytesTooLong(len) => LabelBytesTooLong(len),
             PointerNotPriorToLabel { idx, ptr } => PointerNotPriorToLabel { idx, ptr },

@@ -90,6 +90,10 @@ impl<S> TcpStream<S> {
     pub fn peer_addr(&self) -> SocketAddr {
         self.peer_addr
     }
+
+    pub fn pollable_split(&mut self) -> (&mut S, &mut Peekable<Fuse<UnboundedReceiver<SerialMessage>>>, &mut Option<WriteTcpState>, &mut ReadTcpState) {
+        (&mut self.socket, &mut self.outbound_messages, &mut self.send_state, &mut self.read_state)
+    }
 }
 
 impl<S: Connect + 'static> TcpStream<S> {
@@ -203,53 +207,55 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite> TcpStream<S> {
 impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite + Unpin> Stream for TcpStream<S> {
     type Item = io::Result<SerialMessage>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let socket = Pin::new(&mut self.socket);
-        let outbound_messages = Pin::new(&mut self.outbound_messages);
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let peer = self.peer_addr;
+        let (socket, outbound_messages, send_state, read_state) = self.pollable_split();
+        let mut socket = Pin::new(socket);
+        let mut outbound_messages = Pin::new(outbound_messages);
 
         // this will not accept incoming data while there is data to send
         //  makes this self throttling.
         // TODO: it might be interesting to try and split the sending and receiving futures.
         loop {
             // in the case we are sending, send it all?
-            if self.send_state.is_some() {
+            if send_state.is_some() {
                 // sending...
-                match self.send_state {
+                match send_state {
                     Some(WriteTcpState::LenBytes {
                         ref mut pos,
                         ref length,
                         ..
                     }) => {
-                        let wrote = ready!(socket.poll_write(cx, &length[*pos..]))?;
+                        let wrote = ready!(socket.as_mut().poll_write(cx, &length[*pos..]))?;
                         *pos += wrote;
                     }
                     Some(WriteTcpState::Bytes {
                         ref mut pos,
                         ref bytes,
                     }) => {
-                        let wrote = ready!(socket.poll_write(cx, &bytes[*pos..]))?;
+                        let wrote = ready!(socket.as_mut().poll_write(cx, &bytes[*pos..]))?;
                         *pos += wrote;
                     }
                     Some(WriteTcpState::Flushing) => {
-                        ready!(socket.poll_flush(cx))?;
+                        ready!(socket.as_mut().poll_flush(cx))?;
                     }
                     _ => (),
                 }
 
                 // get current state
-                let current_state = mem::replace(&mut self.send_state, None);
+                let current_state = mem::replace(send_state, None);
 
                 // switch states
                 match current_state {
                     Some(WriteTcpState::LenBytes { pos, length, bytes }) => {
                         if pos < length.len() {
                             mem::replace(
-                                &mut self.send_state,
+                                send_state,
                                 Some(WriteTcpState::LenBytes { pos, length, bytes }),
                             );
                         } else {
                             mem::replace(
-                                &mut self.send_state,
+                                send_state,
                                 Some(WriteTcpState::Bytes { pos: 0, bytes }),
                             );
                         }
@@ -257,33 +263,31 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite + Unpin> Stream for TcpStream
                     Some(WriteTcpState::Bytes { pos, bytes }) => {
                         if pos < bytes.len() {
                             mem::replace(
-                                &mut self.send_state,
+                                send_state,
                                 Some(WriteTcpState::Bytes { pos, bytes }),
                             );
                         } else {
                             // At this point we successfully delivered the entire message.
                             //  flush
-                            mem::replace(&mut self.send_state, Some(WriteTcpState::Flushing));
+                            mem::replace(send_state, Some(WriteTcpState::Flushing));
                         }
                     }
                     Some(WriteTcpState::Flushing) => {
                         // At this point we successfully delivered the entire message.
-                        mem::replace(&mut self.send_state, None);
+                        mem::replace(send_state, None);
                     }
                     None => (),
                 };
             } else {
                 // then see if there is more to send
-                match outbound_messages
-                    .poll_next(cx)
+                match outbound_messages.as_mut().poll_next(cx)
                     // .map_err(|()| io::Error::new(io::ErrorKind::Other, "unknown"))?
                 {
                     // already handled above, here to make sure the poll() pops the next message
                     Poll::Ready(Some(message)) => {
                         // if there is no peer, this connection should die...
                         let (buffer, dst) = message.unwrap();
-                        let peer = self.peer_addr;
-
+                        
                         // This is an error if the destination is not our peer (this is TCP after all)
                         //  This will kill the connection...
                         if peer != dst {
@@ -301,7 +305,7 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite + Unpin> Stream for TcpStream
                         ];
 
                         debug!("sending message len: {} to: {}", buffer.len(), dst);
-                        self.send_state = Some(WriteTcpState::LenBytes {
+                        *send_state = Some(WriteTcpState::LenBytes {
                             pos: 0,
                             length: len,
                             bytes: buffer,
@@ -325,13 +329,13 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite + Unpin> Stream for TcpStream
         while ret_buf.is_none() {
             // Evaluates the next state. If None is the result, then no state change occurs,
             //  if Some(_) is returned, then that will be used as the next state.
-            let new_state: Option<ReadTcpState> = match self.read_state {
+            let new_state: Option<ReadTcpState> = match read_state {
                 ReadTcpState::LenBytes {
                     ref mut pos,
                     ref mut bytes,
                 } => {
                     // debug!("reading length {}", bytes.len());
-                    let read = ready!(socket.poll_read(cx, &mut bytes[*pos..]))?;
+                    let read = ready!(socket.as_mut().poll_read(cx, &mut bytes[*pos..]))?;
                     if read == 0 {
                         // the Stream was closed!
                         debug!("zero bytes read, stream closed?");
@@ -368,7 +372,7 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite + Unpin> Stream for TcpStream
                     ref mut pos,
                     ref mut bytes,
                 } => {
-                    let read = ready!(socket.poll_read(cx, &mut bytes[*pos..]))?;
+                    let read = ready!(socket.as_mut().poll_read(cx, &mut bytes[*pos..]))?;
                     if read == 0 {
                         // the Stream was closed!
                         debug!("zero bytes read for message, stream closed?");
@@ -401,7 +405,7 @@ impl<S: tokio_io::AsyncRead + tokio_io::AsyncWrite + Unpin> Stream for TcpStream
             //  if it was a completed receipt of bytes, then it will move out the bytes
             if let Some(state) = new_state {
                 if let ReadTcpState::Bytes { pos, bytes } =
-                    mem::replace(&mut self.read_state, state)
+                    mem::replace(read_state, state)
                 {
                     debug!("returning bytes");
                     assert_eq!(pos, bytes.len());

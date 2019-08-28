@@ -17,7 +17,7 @@ use std::task::Context;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::stream::Stream;
-use tokio_sync::oneshot;
+use futures::channel::oneshot;
 use futures::{ready, Future, Poll};
 use rand;
 use rand::distributions::{Distribution, Standard};
@@ -65,8 +65,10 @@ impl ActiveRequest {
     }
 
     /// polls the timeout and converts the error
-    fn poll_timeout(&mut self) -> Poll<Result<(), ProtoError>> {
-        self.timeout.poll().map_err(ProtoError::from)
+    fn poll_timeout(&mut self, cx: &mut Context) -> Poll<Result<(), ProtoError>> {
+        let timeout = Pin::new(&mut self.timeout);
+        // FIXME: change return to infallible
+        timeout.poll(cx).map(|r| Ok(r))
     }
 
     /// Returns true of the other side canceled the request
@@ -129,7 +131,7 @@ where
 
 impl<S, MF> DnsMultiplexer<S, MF, Box<dyn DnsStreamHandle>>
 where
-    S: DnsClientStream + 'static,
+    S: DnsClientStream + Unpin + 'static,
     MF: MessageFinalizer,
 {
     /// Spawns a new DnsMultiplexer Stream. This uses a default timeout of 5 seconds for all requests.
@@ -147,7 +149,7 @@ where
         signer: Option<Arc<MF>>,
     ) -> DnsMultiplexerConnect<F, S, MF>
     where
-        F: Future<Output = Result<S, ProtoError>> + Send + 'static,
+        F: Future<Output = Result<S, ProtoError>> + Send + Unpin + 'static,
     {
         Self::with_timeout(stream, stream_handle, Duration::from_secs(5), signer)
     }
@@ -169,7 +171,7 @@ where
         signer: Option<Arc<MF>>,
     ) -> DnsMultiplexerConnect<F, S, MF>
     where
-        F: Future<Output = Result<S, ProtoError>> + Send + 'static,
+        F: Future<Output = Result<S, ProtoError>> + Send + Unpin + 'static,
     {
         DnsMultiplexerConnect {
             stream,
@@ -181,7 +183,7 @@ where
 
     /// loop over active_requests and remove cancelled requests
     ///  this should free up space if we already had 4096 active requests
-    fn drop_cancelled(&mut self) {
+    fn drop_cancelled(&mut self, cx: &mut Context) {
         let mut canceled = HashMap::<u16, ProtoError>::new();
         for (&id, ref mut active_req) in &mut self.active_requests {
             if active_req.is_canceled() {
@@ -189,13 +191,13 @@ where
             }
 
             // check for timeouts...
-            match active_req.poll_timeout() {
+            match active_req.poll_timeout(cx) {
                 Poll::Ready(Ok(_)) => {
                     debug!("request timed out: {}", id);
                     canceled.insert(id, ProtoError::from(ProtoErrorKind::Timeout));
                 }
                 Poll::Pending => (),
-                Err(e) => {
+                Poll::Ready(Err(e)) => {
                     error!("unexpected error from timeout: {}", e);
                     canceled.insert(id, ProtoError::from("error registering timeout"));
                 }
@@ -262,8 +264,8 @@ where
 #[must_use = "futures do nothing unless polled"]
 pub struct DnsMultiplexerConnect<F, S, MF>
 where
-    F: Future<Output = Result<S, ProtoError>> + Send + 'static,
-    S: Stream<Item = Result<SerialMessage, ProtoError>>,
+    F: Future<Output = Result<S, ProtoError>> + Send + Unpin + 'static,
+    S: Stream<Item = Result<SerialMessage, ProtoError>> + Unpin,
     MF: MessageFinalizer + Send + Sync + 'static,
 {
     stream: F,
@@ -274,14 +276,15 @@ where
 
 impl<F, S, MF> Future for DnsMultiplexerConnect<F, S, MF>
 where
-    F: Future<Output = Result<S, ProtoError>> + Send + 'static,
-    S: DnsClientStream + 'static,
+    F: Future<Output = Result<S, ProtoError>> + Send + Unpin + 'static,
+    S: DnsClientStream + Unpin + 'static,
     MF: MessageFinalizer + Send + Sync + 'static,
 {
     type Output = Result<DnsMultiplexer<S, MF, Box<dyn DnsStreamHandle>>, ProtoError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let stream: S = ready!(self.stream.poll());
+        let stream = Pin::new(&mut self.stream);
+        let stream: S = ready!(stream.poll(cx))?;
 
         Poll::Ready(Ok(DnsMultiplexer {
             stream,
@@ -309,7 +312,7 @@ where
 
 impl<S, MF> DnsRequestSender for DnsMultiplexer<S, MF>
 where
-    S: DnsClientStream + 'static,
+    S: DnsClientStream + Unpin + 'static,
     MF: MessageFinalizer + Send + Sync + 'static,
 {
     type DnsResponseFuture = DnsMultiplexerSerialResponse;
@@ -404,26 +407,28 @@ where
 
 impl<S, MF> Stream for DnsMultiplexer<S, MF>
 where
-    S: DnsClientStream + 'static,
+    S: DnsClientStream + Unpin + 'static,
     MF: MessageFinalizer + Send + Sync + 'static,
 {
     type Item = Result<(), ProtoError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // Always drop the cancelled queries first
-        self.drop_cancelled();
+        self.drop_cancelled(cx);
 
         if self.is_shutdown && self.active_requests.is_empty() {
             debug!("stream is done: {}", self);
             return Poll::Ready(None);
         }
 
+        let stream = Pin::new(&mut self.stream);
+
         // Collect all inbound requests, max 100 at a time for QoS
         //   by having a max we will guarantee that the client can't be DOSed in this loop
         // TODO: make the QoS configurable
         let mut messages_received = 0;
         for i in 0..QOS_MAX_RECEIVE_MSGS {
-            match self.stream.poll()? {
+            match stream.poll_next(cx)? {
                 Poll::Ready(Some(buffer)) => {
                     messages_received = i;
 
@@ -489,7 +494,8 @@ impl Future for DnsMultiplexerSerialResponse {
     type Output = Result<DnsResponse, ProtoError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        self.0.poll()
+        let future = Pin::new(&mut self.0);
+        future.poll(cx)
     }
 }
 
@@ -508,19 +514,18 @@ impl Future for DnsMultiplexerSerialResponseInner {
     type Output = Result<DnsResponse, ProtoError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        match self {
+        match *self {
             // The inner type of the completion might have been an error
             //   we need to unwrap that, and translate to be the Future's error
-            DnsMultiplexerSerialResponseInner::Completion(complete) => match ready!(
-                complete
-                    .poll()
+            DnsMultiplexerSerialResponseInner::Completion(complete) => {
+                let complete = Pin::new(&mut complete);
+                complete.poll(cx).map(|r| r
                     .map_err(|_| ProtoError::from("the completion was canceled"))
-            ) {
-                Ok(response) => Poll::Ready(Ok(response)),
-                Err(err) => Err(err),
-            },
+                    .and_then(|r| r)
+                )
+            }
             DnsMultiplexerSerialResponseInner::Err(err) => {
-                Err(err.take().expect("cannot poll after complete"))
+                Poll::Ready(Err(err.take().expect("cannot poll after complete")))
             }
         }
     }

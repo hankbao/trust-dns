@@ -7,9 +7,9 @@
 
 //! `DnsHandle` types perform conversions of the raw DNS messages before sending the messages on the specified streams.
 
-use futures::future::{Future, IntoFuture};
+use futures::future::{Future, FutureExt, IntoFuture, TryFutureExt};
 use futures::channel::mpsc::UnboundedSender;
-use tokio_sync::oneshot;
+use futures::channel::oneshot;
 use rand;
 
 use crate::error::*;
@@ -93,8 +93,7 @@ impl DnsHandle for BasicDnsHandle {
         Box::new(
             receiver
                 .map_err(|c| ProtoError::from(ProtoErrorKind::Canceled(c)))
-                .map(IntoFuture::into_future)
-                .flatten(),
+                .map(|r| r.and_then(|r| r)),
         )
     }
 }
