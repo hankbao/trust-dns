@@ -14,7 +14,7 @@ use std::time::Duration;
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::stream::{Fuse, Peekable, Stream, StreamExt, TryStreamExt};
+use futures::stream::{Fuse, Peekable, Stream, StreamExt};
 use futures::{ready, Future, FutureExt, Poll, TryFutureExt};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use tokio_timer::Timeout;
@@ -91,7 +91,7 @@ impl<S> TcpStream<S> {
         self.peer_addr
     }
 
-    pub fn pollable_split(&mut self) -> (&mut S, &mut Peekable<Fuse<UnboundedReceiver<SerialMessage>>>, &mut Option<WriteTcpState>, &mut ReadTcpState) {
+    fn pollable_split(&mut self) -> (&mut S, &mut Peekable<Fuse<UnboundedReceiver<SerialMessage>>>, &mut Option<WriteTcpState>, &mut ReadTcpState) {
         (&mut self.socket, &mut self.outbound_messages, &mut self.send_state, &mut self.read_state)
     }
 }
@@ -139,7 +139,7 @@ impl<S: Connect + 'static> TcpStream<S> {
         //  sending and receiving tcp packets.
         let tcp = S::connect(&name_server);
         let stream_fut = Timeout::new(tcp, timeout)
-            .map_err(move |e| {
+            .map_err(move |_| {
                 debug!("timed out connecting to: {}", name_server);
                 io::Error::new(
                     io::ErrorKind::TimedOut,

@@ -16,9 +16,9 @@ use std::sync::Arc;
 use std::task::Context;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use futures::stream::Stream;
+use futures::stream::{Stream, StreamExt};
 use futures::channel::oneshot;
-use futures::{ready, Future, Poll};
+use futures::{ready, Future, FutureExt, Poll};
 use rand;
 use rand::distributions::{Distribution, Standard};
 use smallvec::SmallVec;
@@ -282,9 +282,8 @@ where
 {
     type Output = Result<DnsMultiplexer<S, MF, Box<dyn DnsStreamHandle>>, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let stream = Pin::new(&mut self.stream);
-        let stream: S = ready!(stream.poll(cx))?;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let stream: S = ready!(self.stream.poll_unpin(cx))?;
 
         Poll::Ready(Ok(DnsMultiplexer {
             stream,
@@ -412,7 +411,7 @@ where
 {
     type Item = Result<(), ProtoError>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // Always drop the cancelled queries first
         self.drop_cancelled(cx);
 
@@ -421,14 +420,12 @@ where
             return Poll::Ready(None);
         }
 
-        let stream = Pin::new(&mut self.stream);
-
         // Collect all inbound requests, max 100 at a time for QoS
         //   by having a max we will guarantee that the client can't be DOSed in this loop
         // TODO: make the QoS configurable
         let mut messages_received = 0;
         for i in 0..QOS_MAX_RECEIVE_MSGS {
-            match stream.poll_next(cx)? {
+            match self.stream.poll_next_unpin(cx)? {
                 Poll::Ready(Some(buffer)) => {
                     messages_received = i;
 
@@ -493,9 +490,8 @@ impl DnsMultiplexerSerialResponse {
 impl Future for DnsMultiplexerSerialResponse {
     type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let future = Pin::new(&mut self.0);
-        future.poll(cx)
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        self.0.poll_unpin(cx)
     }
 }
 
@@ -513,18 +509,17 @@ enum DnsMultiplexerSerialResponseInner {
 impl Future for DnsMultiplexerSerialResponseInner {
     type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match *self {
             // The inner type of the completion might have been an error
             //   we need to unwrap that, and translate to be the Future's error
-            DnsMultiplexerSerialResponseInner::Completion(complete) => {
-                let complete = Pin::new(&mut complete);
-                complete.poll(cx).map(|r| r
+            DnsMultiplexerSerialResponseInner::Completion(ref mut complete) => {
+                complete.poll_unpin(cx).map(|r| r
                     .map_err(|_| ProtoError::from("the completion was canceled"))
                     .and_then(|r| r)
                 )
             }
-            DnsMultiplexerSerialResponseInner::Err(err) => {
+            DnsMultiplexerSerialResponseInner::Err(ref mut err) => {
                 Poll::Ready(Err(err.take().expect("cannot poll after complete")))
             }
         }

@@ -11,7 +11,7 @@ use std::pin::Pin;
 use std::task::Context;
 
 use futures::stream::{Peekable, Stream, StreamExt};
-use futures::{Future, Poll};
+use futures::{Future, FutureExt, Poll};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 
 use crate::error::*;
@@ -75,6 +75,10 @@ where
             DnsRequestStreamHandle::<R>::new(message_sender),
         )
     }
+
+    fn pollable_split(&mut self) -> (&mut S, &mut Peekable<UnboundedReceiver<OneshotDnsRequest<R>>>) {
+        (&mut self.io_stream, &mut self.outbound_messages)
+    }
 }
 
 impl<S, R> Future for DnsExchange<S, R>
@@ -85,19 +89,20 @@ where
     type Output = Result<(), ProtoError>;
 
     #[allow(clippy::unused_unit)]
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let io_stream = Pin::new(&mut self.io_stream);
-        let outbound_messages = Pin::new(&mut self.outbound_messages);
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let (io_stream, outbound_messages) = self.pollable_split();
+        let mut io_stream = Pin::new(io_stream);
+        let mut outbound_messages = Pin::new(outbound_messages);
 
         // this will not accept incoming data while there is data to send
         //  makes this self throttling.
         loop {
             // poll the underlying stream, to drive it...
-            match io_stream.poll_next(cx) {
+            match io_stream.as_mut().poll_next(cx) {
                 // The stream is ready
                 Poll::Ready(Some(Ok(()))) => (),
                 Poll::Pending => {
-                    if self.io_stream.is_shutdown() {
+                    if io_stream.is_shutdown() {
                         // the io_stream is in a shutdown state, we are only waiting for final results...
                         return Poll::Pending;
                     }
@@ -115,16 +120,16 @@ where
             }
 
             // then see if there is more to send
-            match outbound_messages.poll_next(cx)
+            match outbound_messages.as_mut().poll_next(cx)
             {
                 // already handled above, here to make sure the poll() pops the next message
                 Poll::Ready(Some(dns_request)) => {
                     // if there is no peer, this connection should die...
                     let (dns_request, serial_response): (DnsRequest, _) = dns_request.unwrap();
 
-                    debug!("sending message via: {}", self.io_stream);
+                    debug!("sending message via: {}", io_stream);
 
-                    match serial_response.send_response(self.io_stream.send_message(dns_request)) {
+                    match serial_response.send_response(io_stream.send_message(dns_request)) {
                         Ok(()) => (),
                         Err(_) => {
                             warn!("failed to associate send_message response to the sender");
@@ -137,9 +142,9 @@ where
                 // On not ready, this is our time to return...
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(None) => {
-                    debug!("all handles closed, shutting down: {}", self.io_stream);
+                    debug!("all handles closed, shutting down: {}", io_stream);
                     // if there is nothing that can use this connection to send messages, then this is done...
-                    self.io_stream.shutdown();
+                    io_stream.shutdown();
 
                     // now we'll await the stream to shutdown... see io_stream poll above
                 }
@@ -182,9 +187,8 @@ where
 {
     type Output = Result<DnsExchange<S, R>, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let future = Pin::new(&mut self.0);
-        future.poll(cx)
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        self.0.poll_unpin(cx)
     }
 }
 
@@ -212,7 +216,7 @@ where
 {
     type Output = Result<DnsExchange<S, R>, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             let next;
             match *self {
@@ -247,8 +251,7 @@ where
                     ref error,
                     ref mut outbound_messages,
                 } => {
-                    let outbound_messages = Pin::new(outbound_messages);
-                    while let Some(outbound_message) = match outbound_messages.poll_next(cx) {
+                    while let Some(outbound_message) = match outbound_messages.poll_next_unpin(cx) {
                         Poll::Ready(opt) => opt,
                         Poll::Pending => return Poll::Pending,
                     } {

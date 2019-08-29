@@ -13,7 +13,7 @@ use std::task::Context;
 
 use futures::stream::{Fuse, Peekable, Stream, StreamExt};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
-use futures::{ready, Future, FutureExt, Poll, TryFutureExt};
+use futures::{ready, Future, Poll, TryFutureExt};
 use rand;
 use rand::distributions::{uniform::Uniform, Distribution};
 
@@ -114,21 +114,28 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
     }
 }
 
-impl<S: UdpSocket> Stream for UdpStream<S> {
+impl<S> UdpStream<S> {
+    fn pollable_split(&mut self) -> (&mut S, &mut Peekable<Fuse<UnboundedReceiver<SerialMessage>>>) {
+        (&mut self.socket, &mut self.outbound_messages)
+    }
+}
+
+impl<S: UdpSocket + Send> Stream for UdpStream<S> {
     type Item = Result<SerialMessage, io::Error>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let outbound_messages = Pin::new(&mut self.outbound_messages);
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let (socket, outbound_messages) = self.pollable_split();
+        let mut outbound_messages = Pin::new(outbound_messages);
 
         // this will not accept incoming data while there is data to send
         //  makes this self throttling.
         loop {
             // first try to send
-            match outbound_messages.peek(cx)
+            match outbound_messages.as_mut().peek(cx)
             {
                 Poll::Ready(Some(ref message)) => {
                     // will return if the socket will block
-                    ready!(self.socket.send_to(message.bytes(), &message.addr()));
+                    ready!(socket.send_to(message.bytes(), &message.addr()))?;
                 }
                 // now we get to drop through to the receives...
                 // TODO: should we also return None if there are no more messages to send?
@@ -137,7 +144,7 @@ impl<S: UdpSocket> Stream for UdpStream<S> {
 
             // now pop the request which is already sent
             // If it were an Err, it was returned on peeking.
-            outbound_messages.poll_next(cx).is_ready();
+            outbound_messages.as_mut().poll_next(cx).is_ready();
         }
 
         // For QoS, this will only accept one message and output that
@@ -147,7 +154,7 @@ impl<S: UdpSocket> Stream for UdpStream<S> {
         let mut buf = [0u8; 2048];
 
         // TODO: should we drop this packet if it's not from the same src as dest?
-        let (len, src) = ready!(self.socket.recv_from(&mut buf))?;
+        let (len, src) = ready!(socket.recv_from(&mut buf))?;
         Poll::Ready(Some(Ok(SerialMessage::new(
             buf.iter().take(len).cloned().collect(),
             src,

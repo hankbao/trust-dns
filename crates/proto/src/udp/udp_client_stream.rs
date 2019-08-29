@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::{ready, Future, Poll, Stream};
+use futures::{ready, Future, FutureExt, Poll, Stream};
 use tokio_timer::Timeout;
 
 use crate::error::ProtoError;
@@ -184,7 +184,7 @@ impl<S: UdpSocket + Send + 'static, MF: MessageFinalizer> DnsRequestSender
 impl<S: Send, MF: MessageFinalizer> Stream for UdpClientStream<S, MF> {
     type Item = Result<(), ProtoError>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Self::Item>> {
         // Technically the Stream doesn't actually do anything.
         if self.is_shutdown {
             Poll::Ready(None)
@@ -215,9 +215,8 @@ impl<S> UdpResponse<S> {
 impl<S: UdpSocket> Future for UdpResponse<S> {
     type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let pinned_socket = Pin::new(&mut self.0);
-        pinned_socket.poll(cx).map_err(ProtoError::from).map(|r| r.and_then(|r| r))
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        self.0.poll_unpin(cx).map_err(ProtoError::from).map(|r| r.and_then(|r| r))
     }
 }
 
@@ -233,10 +232,10 @@ where
     marker: PhantomData<S>,
 }
 
-impl<S: Send, MF: MessageFinalizer> Future for UdpClientConnect<S, MF> {
+impl<S: Send + Unpin, MF: MessageFinalizer> Future for UdpClientConnect<S, MF> {
     type Output = Result<UdpClientStream<S, MF>, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Self::Output> {
         // TODO: this doesn't need to be a future?
         Poll::Ready(Ok(UdpClientStream::<S, MF> {
             name_server: self
@@ -264,7 +263,7 @@ enum SingleUseUdpSocket<S> {
 impl<S: UdpSocket> Future for SingleUseUdpSocket<S> {
     type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             *self = match *self {
                 SingleUseUdpSocket::StartSend(ref mut msg, msg_id) => {
@@ -277,8 +276,7 @@ impl<S: UdpSocket> Future for SingleUseUdpSocket<S> {
                     SingleUseUdpSocket::Connect(msg, NextRandomUdpSocket::new(&name_server), msg_id)
                 }
                 SingleUseUdpSocket::Connect(ref mut msg, ref mut future_socket, msg_id) => {
-                    let future_socket = Pin::new(&mut future_socket);
-                    let socket = ready!(future_socket.poll(cx))?;
+                    let socket = ready!(future_socket.poll_unpin(cx))?;
                     // TODO: connect the socket here on merge into master
 
                     // send the message, and then await the response

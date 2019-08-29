@@ -10,7 +10,7 @@
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::{Future, Poll};
+use futures::{Future, FutureExt, Poll};
 
 use crate::error::ProtoError;
 use crate::xfer::{DnsRequest, DnsResponse};
@@ -68,16 +68,14 @@ struct RetrySendFuture<H: DnsHandle> {
     remaining_attempts: usize,
 }
 
-impl<H: DnsHandle> Future for RetrySendFuture<H> {
+impl<H: DnsHandle + Unpin> Future for RetrySendFuture<H> {
     type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let future = Pin::new(&mut self.future);
-
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         // loop over the future, on errors, spawn a new future
         //  on ready and not ready return.
         loop {
-            match future.poll(cx) {
+            match self.future.poll_unpin(cx) {
                 Poll::Ready(Err(e)) => {
                     if self.remaining_attempts == 0 {
                         return Poll::Ready(Err(e));
@@ -86,7 +84,8 @@ impl<H: DnsHandle> Future for RetrySendFuture<H> {
                     self.remaining_attempts -= 1;
                     // FIXME: if the "sent" Message is part of the error result,
                     //  then we can just reuse it... and no clone necessary
-                    self.future = self.handle.send(self.request.clone());
+                    let request = self.request.clone();
+                    self.future = self.handle.send(request);
                 }
                 poll => return poll,
             }
@@ -98,7 +97,6 @@ impl<H: DnsHandle> Future for RetrySendFuture<H> {
 mod test {
     use super::*;
     use crate::error::*;
-    use futures::*;
     use futures::future::*;
     use futures::executor::block_on;
     use crate::op::*;

@@ -158,7 +158,6 @@ const TEST_BYTES_LEN: usize = 8;
 #[cfg(test)]
 fn tcp_client_stream_test(server_addr: IpAddr) {
     use std::io::{Read, Write};
-    use futures::StreamExt;
     use tokio::runtime::current_thread::Runtime;
 
     let succeeded = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

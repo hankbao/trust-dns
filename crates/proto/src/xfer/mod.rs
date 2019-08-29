@@ -306,9 +306,9 @@ where
 {
     type Output = <F as Future>::Output;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
-            *self = match *self {
+            *self = match *self.as_mut() {
                 OneshotDnsResponseReceiver::Receiver(ref mut receiver) => {
                     let receiver = Pin::new(receiver);
                     let future = ready!(receiver
@@ -320,7 +320,7 @@ where
                     let future = Pin::new(future);
                     return future.poll(cx)
                 }
-                OneshotDnsResponseReceiver::Err(err) => {
+                OneshotDnsResponseReceiver::Err(ref mut err) => {
                     return Poll::Ready(Err(err
                         .take()
                         .expect("futures should not be polled after complete")))
