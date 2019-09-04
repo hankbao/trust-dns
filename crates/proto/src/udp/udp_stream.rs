@@ -9,17 +9,21 @@ use std::io;
 use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Context;
 
-use futures::stream::{Fuse, Peekable, Stream, StreamExt};
+use async_trait::async_trait;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
-use futures::{ready, Future, Poll, TryFutureExt};
+use futures::lock::{Mutex, MutexGuard, MutexLockFuture};
+use futures::stream::{Fuse, Peekable, Stream, StreamExt};
+use futures::{ready, Future, FutureExt, Poll, TryFutureExt};
 use rand;
 use rand::distributions::{uniform::Uniform, Distribution};
 
 use crate::xfer::{BufStreamHandle, SerialMessage};
 
 /// Trait for UdpSocket
+#[async_trait]
 pub trait UdpSocket
 where
     Self: Sized + Unpin,
@@ -28,16 +32,18 @@ where
     fn bind(addr: &SocketAddr) -> io::Result<Self>;
     /// Receive data from the socket and returns the number of bytes read and the address from
     /// where the data came on success.
-    fn recv_from(&mut self, buf: &mut [u8]) -> Poll<io::Result<(usize, SocketAddr)>>;
+    async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)>;
     /// Send data to the given address.
-    fn send_to(&mut self, buf: &[u8], target: &SocketAddr) -> Poll<io::Result<usize>>;
+    async fn send_to(&mut self, buf: &[u8], target: &SocketAddr) -> io::Result<usize>;
 }
 
 /// A UDP stream of DNS binary packets
 #[must_use = "futures do nothing unless polled"]
 pub struct UdpStream<S> {
-    socket: S,
+    socket: Arc<Mutex<S>>,
+    sending: Option<Pin<Box<dyn Future<Output = io::Result<usize>>>>>,
     outbound_messages: Peekable<Fuse<UnboundedReceiver<SerialMessage>>>,
+    receiving: Option<Pin<Box<dyn Future<Output = io::Result<SerialMessage>>>>>,
 }
 
 impl<S: UdpSocket + Send + 'static> UdpStream<S> {
@@ -70,8 +76,10 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
         // This set of futures collapses the next udp socket into a stream which can be used for
         //  sending and receiving udp packets.
         let stream = Box::new(next_socket.map_ok(move |socket| UdpStream {
-            socket,
+            socket: Arc::new(Mutex::new(socket)),
+            sending: None,
             outbound_messages: outbound_messages.fuse().peekable(),
+            receiving: None,
         }));
 
         (stream, message_sender)
@@ -95,8 +103,10 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
         let message_sender = BufStreamHandle::new(message_sender);
 
         let stream = UdpStream {
-            socket,
+            socket: Arc::new(Mutex::new(socket)),
+            sending: None,
             outbound_messages: outbound_messages.fuse().peekable(),
+            receiving: None,
         };
 
         (stream, message_sender)
@@ -108,57 +118,99 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
         outbound_messages: UnboundedReceiver<SerialMessage>,
     ) -> Self {
         UdpStream {
-            socket,
+            socket: Arc::new(Mutex::new(socket)),
+            sending: None,
             outbound_messages: outbound_messages.fuse().peekable(),
+            receiving: None,
         }
     }
 }
 
 impl<S> UdpStream<S> {
-    fn pollable_split(&mut self) -> (&mut S, &mut Peekable<Fuse<UnboundedReceiver<SerialMessage>>>) {
-        (&mut self.socket, &mut self.outbound_messages)
+    fn pollable_split(&mut self) -> (
+        &mut Arc<Mutex<S>>, 
+        &mut Option<Pin<Box<dyn Future<Output = io::Result<usize>>>>>,
+        &mut Peekable<Fuse<UnboundedReceiver<SerialMessage>>>,
+        &mut Option<Pin<Box<dyn Future<Output = io::Result<SerialMessage>>>>>) {
+        (&mut self.socket, &mut self.sending, &mut self.outbound_messages, &mut self.receiving)
     }
 }
 
-impl<S: UdpSocket + Send> Stream for UdpStream<S> {
+impl<S: UdpSocket + Send + 'static> Stream for UdpStream<S> {
     type Item = Result<SerialMessage, io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let (socket, outbound_messages) = self.pollable_split();
+        let (socket, sending, outbound_messages, receiving) = self.pollable_split();
         let mut outbound_messages = Pin::new(outbound_messages);
 
         // this will not accept incoming data while there is data to send
         //  makes this self throttling.
         loop {
+            // if there's something currently sending, send it
+            if let Some(ref mut sending) = sending {
+                ready!(sending.as_mut().poll(cx))?;
+            }
+
+            *sending = None;
+
             // first try to send
-            match outbound_messages.as_mut().peek(cx)
+            match outbound_messages.as_mut().poll_next(cx)
             {
-                Poll::Ready(Some(ref message)) => {
+                Poll::Ready(Some(message)) => {
+                    let socket = Arc::clone(socket);
+                    let sending_fut = async {
+                        let message = message;
+                        let socket = socket;
+                        let mut socket = socket.lock().await;
+                        let addr = &message.addr();
+                        socket.send_to(message.bytes(), addr).await
+                    };
+
                     // will return if the socket will block
-                    ready!(socket.send_to(message.bytes(), &message.addr()))?;
+                    *sending = Some(Box::pin(sending_fut));
                 }
                 // now we get to drop through to the receives...
                 // TODO: should we also return None if there are no more messages to send?
                 Poll::Pending | Poll::Ready(None) => break,
             }
-
-            // now pop the request which is already sent
-            // If it were an Err, it was returned on peeking.
-            outbound_messages.as_mut().poll_next(cx).is_ready();
         }
 
         // For QoS, this will only accept one message and output that
         // receive all inbound messages
 
         // TODO: this should match edns settings
-        let mut buf = [0u8; 2048];
+        loop {
+            let msg = if let Some(receiving) = receiving {
+                // TODO: should we drop this packet if it's not from the same src as dest?
+                let msg = ready!(receiving.as_mut().poll(cx))?;
 
-        // TODO: should we drop this packet if it's not from the same src as dest?
-        let (len, src) = ready!(socket.recv_from(&mut buf))?;
-        Poll::Ready(Some(Ok(SerialMessage::new(
-            buf.iter().take(len).cloned().collect(),
-            src,
-        ))))
+                Some(Poll::Ready(Some(Ok(msg))))
+            } else {
+                None
+            };
+ 
+            *receiving = None;
+
+            if let Some(msg) = msg {
+                return msg;
+            }
+
+            let socket = Arc::clone(socket);
+            let receive_future = async {
+                let socket = socket;
+
+                let mut buf = [0u8; 2048];
+                let mut socket = socket.lock().await;
+                let (len, src) = socket.recv_from(&mut buf).await?;
+                
+                Ok(SerialMessage::new(
+                    buf.iter().take(len).cloned().collect(),
+                    src,
+                ))
+            };
+
+            *receiving = Some(Box::pin(receive_future));
+        }
     }
 }
 
@@ -247,22 +299,18 @@ fn test_udp_stream_ipv6() {
 use tokio_udp;
 
 #[cfg(feature = "tokio-compat")]
+#[async_trait]
 impl UdpSocket for tokio_udp::UdpSocket {
     fn bind(addr: &SocketAddr) -> io::Result<Self> {
         tokio_udp::UdpSocket::bind(addr)
     }
-    fn recv_from(&mut self, buf: &mut [u8]) -> Poll<io::Result<(usize, SocketAddr)>> {
-        // FIXME: this needs to be updated!
-        //self.recv_from(buf)
-        Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "FIX THIS INTERFACE")))
+    
+    async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.recv_from(buf).await
     }
-    fn send_to(&mut self, buf: &[u8], target: &SocketAddr) -> Poll<io::Result<usize>> {
-        // FIXME: this needs to be updated!
-        // self.send_to(buf, target).map(|x| match x {
-        //     Poll::Ready(_) => Poll::Ready(()),
-        //     Poll::Pending => Poll::Pending,
-        // })
-        Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "FIX THIS INTERFACE")))
+
+    async fn send_to(&mut self, buf: &[u8], target: &SocketAddr) -> io::Result<usize> {
+        self.send_to(buf, target).await
     }
 }
 

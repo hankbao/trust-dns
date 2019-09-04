@@ -14,6 +14,7 @@
 
 //! Trust-DNS Protocol library
 
+extern crate async_trait;
 #[cfg(feature = "dnssec")]
 extern crate data_encoding;
 #[macro_use]
