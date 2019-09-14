@@ -14,9 +14,9 @@ use std::task::Context;
 
 use async_trait::async_trait;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
-use futures::lock::{Mutex, MutexGuard, MutexLockFuture};
+use futures::lock::Mutex;
 use futures::stream::{Fuse, Peekable, Stream, StreamExt};
-use futures::{ready, Future, FutureExt, Poll, TryFutureExt};
+use futures::{ready, Future, Poll, TryFutureExt};
 use rand;
 use rand::distributions::{uniform::Uniform, Distribution};
 
@@ -39,11 +39,11 @@ where
 
 /// A UDP stream of DNS binary packets
 #[must_use = "futures do nothing unless polled"]
-pub struct UdpStream<S> {
+pub struct UdpStream<S: Send> {
     socket: Arc<Mutex<S>>,
-    sending: Option<Pin<Box<dyn Future<Output = io::Result<usize>>>>>,
+    sending: Option<Pin<Box<dyn Future<Output = io::Result<usize>> + Send>>>,
     outbound_messages: Peekable<Fuse<UnboundedReceiver<SerialMessage>>>,
-    receiving: Option<Pin<Box<dyn Future<Output = io::Result<SerialMessage>>>>>,
+    receiving: Option<Pin<Box<dyn Future<Output = io::Result<SerialMessage>> + Send>>>,
 }
 
 impl<S: UdpSocket + Send + 'static> UdpStream<S> {
@@ -126,12 +126,12 @@ impl<S: UdpSocket + Send + 'static> UdpStream<S> {
     }
 }
 
-impl<S> UdpStream<S> {
+impl<S: Send> UdpStream<S> {
     fn pollable_split(&mut self) -> (
         &mut Arc<Mutex<S>>, 
-        &mut Option<Pin<Box<dyn Future<Output = io::Result<usize>>>>>,
+        &mut Option<Pin<Box<dyn Future<Output = io::Result<usize>> + Send>>>,
         &mut Peekable<Fuse<UnboundedReceiver<SerialMessage>>>,
-        &mut Option<Pin<Box<dyn Future<Output = io::Result<SerialMessage>>>>>) {
+        &mut Option<Pin<Box<dyn Future<Output = io::Result<SerialMessage>> + Send>>>) {
         (&mut self.socket, &mut self.sending, &mut self.outbound_messages, &mut self.receiving)
     }
 }

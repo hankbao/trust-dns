@@ -7,8 +7,11 @@
 
 use std::fmt::{self, Display};
 use std::net::{Ipv4Addr, SocketAddr};
+use std::task::Context;
+use std::pin::Pin;
 
-use futures::{Async, Future, Poll, Stream};
+use futures::{Future, FutureExt, Poll, Stream, TryFutureExt};
+use futures::stream::{StreamExt, TryStreamExt};
 
 use crate::error::ProtoError;
 use crate::xfer::{DnsClientStream, SerialMessage};
@@ -28,7 +31,7 @@ impl MdnsClientStream {
         mdns_query_type: MdnsQueryType,
         packet_ttl: Option<u32>,
         ipv4_if: Option<Ipv4Addr>,
-    ) -> (MdnsClientConnect, Box<DnsStreamHandle + Send>) {
+    ) -> (MdnsClientConnect, Box<dyn DnsStreamHandle + Send>) {
         Self::new(*MDNS_IPV4, mdns_query_type, packet_ttl, ipv4_if, None)
     }
 
@@ -37,7 +40,7 @@ impl MdnsClientStream {
         mdns_query_type: MdnsQueryType,
         packet_ttl: Option<u32>,
         ipv6_if: Option<u32>,
-    ) -> (MdnsClientConnect, Box<DnsStreamHandle + Send>) {
+    ) -> (MdnsClientConnect, Box<dyn DnsStreamHandle + Send>) {
         Self::new(*MDNS_IPV6, mdns_query_type, packet_ttl, None, ipv6_if)
     }
 
@@ -56,15 +59,15 @@ impl MdnsClientStream {
         packet_ttl: Option<u32>,
         ipv4_if: Option<Ipv4Addr>,
         ipv6_if: Option<u32>,
-    ) -> (MdnsClientConnect, Box<DnsStreamHandle + Send>) {
+    ) -> (MdnsClientConnect, Box<dyn DnsStreamHandle + Send>) {
         let (stream_future, sender) =
             MdnsStream::new(mdns_addr, mdns_query_type, packet_ttl, ipv4_if, ipv6_if);
 
-        let new_future = Box::new(
-            stream_future
-                .map(move |mdns_stream| MdnsClientStream { mdns_stream })
-                .map_err(ProtoError::from),
-        );
+        let stream_future = stream_future
+                .map_ok(move |mdns_stream| MdnsClientStream { mdns_stream })
+                .map_err(ProtoError::from);
+
+        let new_future = Box::new(stream_future);
         let new_future = MdnsClientConnect(new_future);
 
         let sender = Box::new(BufDnsStreamHandle::new(mdns_addr, sender));
@@ -86,29 +89,29 @@ impl DnsClientStream for MdnsClientStream {
 }
 
 impl Stream for MdnsClientStream {
-    type Item = SerialMessage;
-    type Error = ProtoError;
+    type Item = Result<SerialMessage, ProtoError>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        match ready!(self.mdns_stream.poll().map_err(ProtoError::from)) {
-            Some(serial_message) => {
-                // TODO: for mDNS queries could come from anywhere. It's not clear that there is anything
-                //       we can validate in this case.
-                Poll::Ready(Some(Ok(serial_message)))
-            }
-            None => Poll::Ready(None),
-        }
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let mdns_stream = &mut self.as_mut().mdns_stream;
+        mdns_stream.map_err(ProtoError::from).poll_next_unpin(cx)
+        // match ready!(self.mdns_stream.poll_next_unpin(cx).map_err(ProtoError::from)) {
+        //     Some(serial_message) => {
+        //         // TODO: for mDNS queries could come from anywhere. It's not clear that there is anything
+        //         //       we can validate in this case.
+        //         Poll::Ready(Some(Ok(serial_message)))
+        //     }
+        //     None => Poll::Ready(None),
+        // }
     }
 }
 
 /// A future that resolves to an MdnsClientStream
-pub struct MdnsClientConnect(Box<Future<Output = Result<MdnsClientStream, ProtoError>> + Send>);
+pub struct MdnsClientConnect(Box<dyn Future<Output = Result<MdnsClientStream, ProtoError>> + Send + Unpin>);
 
 impl Future for MdnsClientConnect {
-    type Item = MdnsClientStream;
-    type Error = ProtoError;
+    type Output = Result<MdnsClientStream, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        self.0.poll()
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        self.0.as_mut().poll_unpin(cx)
     }
 }

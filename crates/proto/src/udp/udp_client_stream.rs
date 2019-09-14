@@ -7,7 +7,6 @@
 
 use std::borrow::Borrow;
 use std::fmt::{self, Display};
-use std::io;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -15,12 +14,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::{ready, Future, FutureExt, Poll, Stream};
+use futures::{Future, Poll, Stream};
 use tokio_timer::timeout::{Elapsed, Timeout};
 
 use crate::error::ProtoError;
 use crate::op::message::NoopMessageFinalizer;
-use crate::op::{Message, MessageFinalizer, OpCode};
+use crate::op::{MessageFinalizer, OpCode};
 use crate::udp::udp_stream::{NextRandomUdpSocket, UdpSocket};
 use crate::xfer::{DnsRequest, DnsRequestSender, DnsResponse, SerialMessage};
 
@@ -202,7 +201,7 @@ impl UdpResponse {
 
     /// ad already completed future
     fn complete<F: Future<Output = Result<DnsResponse, ProtoError>> + Send + 'static>(f: F) -> Self {
-        /// FIXME: this constructure isn't really necessary
+        // FIXME: this constructure isn't really necessary
         UdpResponse(Box::pin(Timeout::new(f, Duration::from_secs(5))))
     }
 }
@@ -319,13 +318,17 @@ impl SingleUseUdpSocket {
     }
 }
 
+#[cfg(test)]
+mod tests {
+
 #[cfg(not(target_os = "linux"))]
-#[cfg(test)]
 use std::net::Ipv6Addr;
-#[cfg(test)]
 use std::net::{IpAddr, Ipv4Addr};
-#[cfg(test)]
 use tokio_udp;
+
+use crate::op::Message;
+use super::*;
+
 
 #[test]
 fn test_udp_client_stream_ipv4() {
@@ -338,7 +341,6 @@ fn test_udp_client_stream_ipv6() {
     udp_client_stream_test(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)))
 }
 
-#[cfg(test)]
 fn udp_client_stream_test(server_addr: IpAddr) {
     use crate::op::Query;
     use crate::rr::rdata::NULL;
@@ -458,4 +460,5 @@ fn udp_client_stream_test(server_addr: IpAddr) {
     server_handle.join().expect("server thread failed");
 
     assert!(worked_once);
+}
 }
