@@ -230,10 +230,8 @@ where
             }
         }
 
-        // FIXME: need a Waker here, right?
-        panic!("could not get next random query id, delaying");
-        //task::current().notify();
-
+        // // FIXME: this was a task::current().notify(); is this right?
+        // cx.waker().wake_by_ref();
         Poll::Pending
     }
 

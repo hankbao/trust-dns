@@ -8,23 +8,25 @@
 //! Structs for creating and using a AsyncResolver
 use std::fmt;
 use std::net::IpAddr;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::Context;
 
 use futures::{
     self, future,
-    sync::{mpsc, oneshot},
-    Future, Poll,
+    channel::{mpsc, oneshot},
+    Future, FutureExt, Poll, TryFutureExt,
 };
 use proto::error::ProtoResult;
 use proto::rr::domain::TryParseIp;
 use proto::rr::{IntoName, Name, RData, RecordType};
 use proto::xfer::DnsRequestOptions;
 
-use config::{ResolverConfig, ResolverOpts};
-use dns_lru::{self, DnsLru};
-use error::*;
-use lookup::{self, LookupFuture};
-use lookup_ip::LookupIpFuture;
+use crate::config::{ResolverConfig, ResolverOpts};
+use crate::dns_lru::{self, DnsLru};
+use crate::error::*;
+use crate::lookup::{self, Lookup, LookupFuture};
+use crate::lookup_ip::LookupIpFuture;
 
 mod background;
 
@@ -66,10 +68,10 @@ pub struct AsyncResolver {
 #[derive(Debug)]
 pub struct Background<F, G = F>
 where
-    F: Future<Error = ResolveError>,
-    G: Future<Error = ResolveError>,
+    F: Future,
+    G: Future,
 {
-    inner: BgInner<G::Item, F, G>,
+    inner: BgInner<G::Output, F, G>,
 }
 
 /// Future returned by `LookupIp` requests to the background task.
@@ -79,12 +81,13 @@ pub type BackgroundLookupIp = Background<LookupIpFuture>;
 pub type BackgroundLookup<F = LookupFuture> = Background<LookupFuture, F>;
 
 /// Type alias for the complex inner part of a `Background` future.
-type BgInner<T, F, G> = future::Either<BgSend<F, G>, future::FutureResult<T, ResolveError>>;
+//type BgInner<T, F, G> = future::Either<BgSend<F, G>, future::Ready<Result<T, ResolveError>>>;
+type BgInner<T, F, G> = future::Either<BgSend<F, G>, future::Ready<T>>;
 
 /// The branch of `BgInner` where the request was successfully sent
 /// to the background task.
-type BgSend<F, G> = futures::AndThen<
-    futures::MapErr<oneshot::Receiver<F>, fn(oneshot::Canceled) -> ResolveError>,
+type BgSend<F, G> = future::AndThen<
+    future::MapErr<oneshot::Receiver<F>, fn(oneshot::Canceled) -> ResolveError>,
     G,
     fn(F) -> G,
 >;
@@ -157,7 +160,7 @@ impl AsyncResolver {
     pub fn new(
         config: ResolverConfig,
         options: ResolverOpts,
-    ) -> (Self, impl Future<Item = (), Error = ()>) {
+    ) -> (Self, impl Future<Output = ()>) {
         let lru = DnsLru::new(options.cache_size, dns_lru::TtlConfig::from_opts(&options));
         let lru = Arc::new(Mutex::new(lru));
 
@@ -182,18 +185,18 @@ impl AsyncResolver {
         config: ResolverConfig,
         options: ResolverOpts,
         lru: Arc<Mutex<DnsLru>>,
-    ) -> (Self, impl Future<Item = (), Error = ()>) {
+    ) -> (Self, impl Future<Output = ()>) {
         let (request_tx, request_rx) = mpsc::unbounded();
         let background = background::task(config, options, lru, request_rx);
         let handle = Self { request_tx };
-        (handle, background)
+        (handle, background.map(|_| ()))
     }
 
     /// Constructs a new Resolver with the system configuration.
     ///
     /// This will use `/etc/resolv.conf` on Unix OSes and the registry on Windows.
     #[cfg(any(unix, target_os = "windows"))]
-    pub fn from_system_conf() -> ResolveResult<(Self, impl Future<Item = (), Error = ()>)> {
+    pub fn from_system_conf() -> ResolveResult<(Self, impl Future<Output = ()>)> {
         let (config, options) = super::system_conf::read_system_conf()?;
         Ok(Self::new(config, options))
     }
@@ -223,14 +226,14 @@ impl AsyncResolver {
         ResolveErrorKind::Message("oneshot canceled unexpectedly, this is a bug").into()
     }
 
-    pub(crate) fn inner_lookup<F>(
+    pub(crate) fn inner_lookup<T, F>(
         &self,
         name: Name,
         record_type: RecordType,
         options: DnsRequestOptions,
     ) -> BackgroundLookup<F>
     where
-        F: Future<Error = ResolveError>,
+        F: Future<Output = Result<T, ResolveError>>,
         F: From<LookupFuture>,
     {
         let (tx, rx) = oneshot::channel();
@@ -334,40 +337,39 @@ impl fmt::Debug for AsyncResolver {
 
 impl<F, G> Future for Background<F, G>
 where
-    F: Future<Error = ResolveError>,
-    G: Future<Error = ResolveError>,
-    BgInner<G::Item, F, G>: Future<Item = G::Item, Error = ResolveError>,
+    F: Future + Unpin,
+    G: Future + Unpin,
+    BgInner<G::Output, F, G>: Future<Output = G::Output>,
 {
-    type Item = G::Item;
-    type Error = ResolveError;
+    type Output = G::Output;
 
     #[inline]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.inner.poll()
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        self.inner.poll_unpin(cx)
     }
 }
 
 impl<E, F, G> From<E> for Background<F, G>
 where
     E: Into<ResolveError>,
-    F: Future<Error = ResolveError>,
-    G: Future<Error = ResolveError>,
+    F: Future,
+    G: Future,
 {
     fn from(err: E) -> Self {
         Background {
-            inner: future::Either::B(future::err(err.into())),
+            inner: future::Either::Right(future::err(err.into())),
         }
     }
 }
 
 impl<F, G> From<BgSend<F, G>> for Background<F, G>
 where
-    F: Future<Error = ResolveError>,
-    G: Future<Error = ResolveError>,
+    F: Future,
+    G: Future,
 {
     fn from(f: BgSend<F, G>) -> Self {
         Background {
-            inner: future::Either::A(f),
+            inner: future::Either::Left(f),
         }
     }
 }
@@ -384,7 +386,7 @@ mod tests {
     use self::tokio::runtime::current_thread::Runtime;
     use proto::xfer::DnsRequest;
 
-    use config::{LookupIpStrategy, NameServerConfig};
+    use crate::config::{LookupIpStrategy, NameServerConfig};
 
     use super::*;
 

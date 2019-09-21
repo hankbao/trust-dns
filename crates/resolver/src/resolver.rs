@@ -13,12 +13,12 @@ use std::sync::Mutex;
 use proto::rr::RecordType;
 use tokio::runtime::{self, Runtime};
 
-use config::{ResolverConfig, ResolverOpts};
-use error::*;
-use lookup;
-use lookup::Lookup;
-use lookup_ip::LookupIp;
-use AsyncResolver;
+use crate::config::{ResolverConfig, ResolverOpts};
+use crate::error::*;
+use crate::lookup;
+use crate::lookup::Lookup;
+use crate::lookup_ip::LookupIp;
+use crate::AsyncResolver;
 
 /// The Resolver is used for performing DNS queries.
 ///

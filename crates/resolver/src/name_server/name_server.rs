@@ -9,8 +9,9 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
+use std::pin::Pin;
 
-use futures::{future, Future};
+use futures::{future, Future, FutureExt};
 
 use proto::error::{ProtoError, ProtoResult};
 #[cfg(feature = "mdns")]
@@ -19,11 +20,11 @@ use proto::op::ResponseCode;
 use proto::xfer::{DnsHandle, DnsRequest, DnsResponse};
 
 #[cfg(feature = "mdns")]
-use config::Protocol;
-use config::{NameServerConfig, ResolverOpts};
-use name_server::NameServerState;
-use name_server::NameServerStats;
-use name_server::{ConnectionHandle, ConnectionProvider, StandardConnection};
+use crate::config::Protocol;
+use crate::config::{NameServerConfig, ResolverOpts};
+use crate::name_server::NameServerState;
+use crate::name_server::NameServerStats;
+use crate::name_server::{ConnectionHandle, ConnectionProvider, StandardConnection};
 
 /// Specifies the details of a remote NameServer used for lookups
 #[derive(Clone)]
@@ -112,7 +113,7 @@ where
     C: DnsHandle,
     P: ConnectionProvider<ConnHandle = C>,
 {
-    type Response = Box<dyn Future<Item = DnsResponse, Error = ProtoError> + Send>;
+    type Response = Pin<Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send + Unpin>>;
 
     fn is_verifying_dnssec(&self) -> bool {
         self.options.validate
@@ -131,7 +132,7 @@ where
         // if state is failed, return future::err(), unless retry delay expired...
         let client = match self.connected_mut_client() {
             Ok(client) => client,
-            Err(e) => return Box::new(future::err(e)) as Self::Response,
+            Err(e) => return future::err(e).boxed() as Self::Response,
         };
 
         // Because a Poisoned lock error could have occurred, make sure to create a new Mutex...
@@ -252,7 +253,7 @@ mod tests {
     use proto::xfer::{DnsHandle, DnsRequestOptions};
 
     use super::*;
-    use config::Protocol;
+    use crate::config::Protocol;
 
     #[test]
     fn test_name_server() {
@@ -264,7 +265,7 @@ mod tests {
             tls_dns_name: None,
         };
         let mut io_loop = Runtime::new().unwrap();
-        let name_server = future::lazy(|| {
+        let name_server = future::lazy(|_| {
             future::ok(NameServer::<_, StandardConnection>::new(
                 config,
                 ResolverOpts::default(),
