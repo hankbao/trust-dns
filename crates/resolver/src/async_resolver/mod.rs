@@ -189,7 +189,7 @@ impl AsyncResolver {
         let (request_tx, request_rx) = mpsc::unbounded();
         let background = background::task(config, options, lru, request_rx);
         let handle = Self { request_tx };
-        (handle, background.map(|_| ()))
+        (handle, background)
     }
 
     /// Constructs a new Resolver with the system configuration.
@@ -243,9 +243,11 @@ impl AsyncResolver {
             options,
             tx,
         };
+
         if self.request_tx.unbounded_send(request).is_err() {
             return ResolveErrorKind::Message("background resolver gone, this is a bug").into();
         }
+
         let f: BgSend<LookupFuture, F> = rx
             .map_err(Self::oneshot_canceled as fn(oneshot::Canceled) -> ResolveError)
             .and_then(F::from);
@@ -272,6 +274,7 @@ impl AsyncResolver {
             // probably be okay to just `expect` the unbounded send to be successful.
             return ResolveErrorKind::Message("background resolver gone, this is a bug").into();
         }
+
         let f: BgSend<LookupIpFuture, LookupIpFuture> = rx
             .map_err(Self::oneshot_canceled as fn(oneshot::Canceled) -> ResolveError)
             .and_then(LookupIpFuture::from);
@@ -414,6 +417,8 @@ mod tests {
     }
 
     fn lookup_test(config: ResolverConfig) {
+        env_logger::try_init().ok();
+
         let mut io_loop = Runtime::new().unwrap();
         let (resolver, bg) = AsyncResolver::new(config, ResolverOpts::default());
         io_loop.spawn(bg);

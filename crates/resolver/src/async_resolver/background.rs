@@ -43,7 +43,7 @@ pub(super) fn task(
     options: ResolverOpts,
     lru: Arc<Mutex<DnsLru>>,
     request_rx: mpsc::UnboundedReceiver<Request>,
-) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+) -> impl Future<Output = ()> + Send {
     future::lazy(move |_| {
         debug!("trust-dns resolver running");
 
@@ -73,6 +73,7 @@ pub(super) fn task(
             None
         };
 
+        trace!("handle passed back");
         Task {
             config,
             options,
@@ -80,9 +81,7 @@ pub(super) fn task(
             hosts,
             request_rx,
         }
-    })
-    .map(|_| ())
-    .boxed()
+    }).flatten()
 }
 
 type ClientCache = CachingClient<LookupEither<ConnectionHandle, StandardConnection>>;
@@ -221,6 +220,7 @@ impl Future for Task {
                     options,
                     tx,
                 }) => {
+                    trace!("AsyncResolver performing lookup");
                     let future = self.lookup(name, record_type, options);
                     // tx.send() will return an error if the oneshot was canceled, but
                     // we don't actually care, so just drop the future.
@@ -231,6 +231,7 @@ impl Future for Task {
                     maybe_ip,
                     tx,
                 }) => {
+                    trace!("AsyncResolver performing lookup_ip");
                     let future = self.lookup_ip(maybe_name, maybe_ip);
                     // tx.send() will return an error if the oneshot was canceled, but
                     // we don't actually care, so just drop the future.
