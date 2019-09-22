@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::pin::Pin;
 
-use futures::{future, Future, FutureExt, TryFutureExt};
+use futures::{future, Future, TryFutureExt};
 
 use proto::error::{ProtoError, ProtoResult};
 #[cfg(feature = "mdns")]
@@ -132,11 +132,11 @@ where
         // if state is failed, return future::err(), unless retry delay expired...
         let client = match self.connected_mut_client() {
             Ok(client) => client,
-            Err(e) => return Pin::new(Box::new(future::err(e))) as Self::Response,
+            Err(e) => return Box::pin(future::err(e)) as Self::Response,
         };
 
         // Because a Poisoned lock error could have occurred, make sure to create a new Mutex...
-        Pin::new(Box::new(client
+        Box::pin(client
                 .send(request)
                 .and_then(move |response| {
                     // first we'll evaluate if the message succeeded
@@ -177,7 +177,7 @@ where
                     // These are connection failures, not lookup failures, that is handled in the resolver layer
                     future::err(error)
                 })
-        ))
+        )
         
     }
 }
@@ -245,7 +245,7 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::time::Duration;
 
-    use futures::future;
+    use futures::{future, FutureExt};
     use tokio::runtime::current_thread::Runtime;
 
     use proto::op::{Query, ResponseCode};
@@ -266,15 +266,15 @@ mod tests {
         };
         let mut io_loop = Runtime::new().unwrap();
         let name_server = future::lazy(|_| {
-            future::ok(NameServer::<_, StandardConnection>::new(
+            NameServer::<_, StandardConnection>::new(
                 config,
                 ResolverOpts::default(),
-            ))
+            )
         });
 
         let name = Name::parse("www.example.com.", None).unwrap();
         let response = io_loop
-            .block_on(name_server.and_then(|mut name_server| {
+            .block_on(name_server.then(|mut name_server| {
                 name_server.lookup(
                     Query::query(name.clone(), RecordType::A),
                     DnsRequestOptions::default(),
@@ -295,11 +295,11 @@ mod tests {
         };
         let mut io_loop = Runtime::new().unwrap();
         let name_server =
-            future::lazy(|| future::ok(NameServer::<_, StandardConnection>::new(config, options)));
+            future::lazy(|_| NameServer::<_, StandardConnection>::new(config, options));
 
         let name = Name::parse("www.example.com.", None).unwrap();
         assert!(io_loop
-            .block_on(name_server.and_then(|mut name_server| name_server.lookup(
+            .block_on(name_server.then(|mut name_server| name_server.lookup(
                 Query::query(name.clone(), RecordType::A),
                 DnsRequestOptions::default()
             )))

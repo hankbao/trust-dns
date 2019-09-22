@@ -25,7 +25,7 @@ use proto::xfer::DnsRequestOptions;
 use crate::config::{ResolverConfig, ResolverOpts};
 use crate::dns_lru::{self, DnsLru};
 use crate::error::*;
-use crate::lookup::{self, Lookup, LookupFuture};
+use crate::lookup::{self, LookupFuture};
 use crate::lookup_ip::LookupIpFuture;
 
 mod background;

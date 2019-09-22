@@ -91,9 +91,9 @@ impl DnsHandle for BasicDnsHandle {
         };
 
         // convert the oneshot into a Box of a Future message and error.
-        Pin::new(Box::new(receiver
+        Box::pin(receiver
             .map_err(|c| ProtoError::from(ProtoErrorKind::Canceled(c)))
-            .map(|r| r.and_then(|r| r))))
+            .map(|r| r.and_then(|r| r)))
 
     }
 }

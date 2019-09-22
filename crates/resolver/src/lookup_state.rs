@@ -8,7 +8,6 @@
 //! Caching related functionality for the Resolver.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::mem;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex, TryLockError};
@@ -16,7 +15,7 @@ use std::time::Instant;
 use std::pin::Pin;
 use std::task::Context;
 
-use futures::{future, task, Future, FutureExt, Poll};
+use futures::{future, Future, FutureExt, Poll};
 
 use proto::op::{Message, Query, ResponseCode};
 use proto::rr::domain::usage::{
@@ -358,7 +357,7 @@ impl<C: DnsHandle + 'static> QueryFuture<C> {
 impl<C: DnsHandle + 'static> Future for QueryFuture<C> {
     type Output = Result<Records, ResolveError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match self.message_future.poll_unpin(cx) {
             Poll::Ready(Ok(message)) => {
                 // TODO: take all records and cache them?
@@ -384,13 +383,21 @@ struct InsertCache {
     cache: Arc<Mutex<DnsLru>>,
 }
 
+impl InsertCache {
+    fn split(&mut self) -> (&mut Records, &mut Query, &Arc<Mutex<DnsLru>>) {
+        (&mut self.rdatas, &mut self.query, &self.cache)
+    }
+}
+
 impl Future for InsertCache {
     type Output = Result<Lookup, ResolveError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let (rdatas, query, cache) = self.split();
+        
         // first transition any polling that is needed (mutable refs...)
         // FIXME: replace this with a futures lock
-        match self.cache.try_lock() {
+        match cache.try_lock() {
             Err(TryLockError::WouldBlock) => {
                 // FIXME: is this right?
                 cx.waker().wake_by_ref();
@@ -404,8 +411,8 @@ impl Future for InsertCache {
             }
             Ok(mut lru) => {
                 // this will put this object into an inconsistent state, but no one should call poll again...
-                let query = mem::replace(&mut self.query, Query::new());
-                let rdata = mem::replace(&mut self.rdatas, Records::NoData { ttl: None });
+                let query = mem::replace(query, Query::new());
+                let rdata = mem::replace(rdatas, Records::NoData { ttl: None });
 
                 match rdata {
                     Records::Exists(rdata) => {
@@ -580,7 +587,7 @@ impl<C: DnsHandle + 'static> QueryState<C> {
 impl<C: DnsHandle + 'static> Future for QueryState<C> {
     type Output = Result<Lookup, ResolveError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         // first transition any polling that is needed (mutable refs...)
         let records: Option<Records>;
         match *self {
@@ -667,6 +674,7 @@ mod tests {
     use std::time::*;
 
     use futures::future;
+    use futures::executor::block_on;
 
     use proto::error::{ProtoError, ProtoResult};
     use proto::op::{Message, Query};
@@ -682,8 +690,7 @@ mod tests {
         let mut client = mock(vec![empty()]);
 
         assert_eq!(
-            *QueryState::lookup(Query::new(), Default::default(), &mut client, cache)
-                .wait()
+            *block_on(QueryState::lookup(Query::new(), Default::default(), &mut client, cache))
                 .unwrap_err()
                 .kind(),
             ResolveErrorKind::NoRecordsFound {
@@ -712,8 +719,7 @@ mod tests {
 
         let mut client = mock(vec![empty()]);
 
-        let ips = QueryState::lookup(Query::new(), Default::default(), &mut client, cache)
-            .wait()
+        let ips = block_on(QueryState::lookup(Query::new(), Default::default(), &mut client, cache))
             .unwrap();
 
         assert_eq!(
@@ -728,8 +734,7 @@ mod tests {
         // first should come from client...
         let mut client = mock(vec![v4_message()]);
 
-        let ips = QueryState::lookup(Query::new(), Default::default(), &mut client, cache.clone())
-            .wait()
+        let ips = block_on(QueryState::lookup(Query::new(), Default::default(), &mut client, cache.clone()))
             .unwrap();
 
         assert_eq!(
@@ -740,8 +745,7 @@ mod tests {
         // next should come from cache...
         let mut client = mock(vec![empty()]);
 
-        let ips = QueryState::lookup(Query::new(), Default::default(), &mut client, cache)
-            .wait()
+        let ips = block_on(QueryState::lookup(Query::new(), Default::default(), &mut client, cache))
             .unwrap();
 
         assert_eq!(
@@ -781,13 +785,12 @@ mod tests {
         // the cname should succeed, we shouldn't query again after that, which would cause an error...
         let mut client = mock(vec![error(), cname_message()]);
 
-        let ips = QueryState::lookup(
+        let ips = block_on(QueryState::lookup(
             Query::query(Name::from_str("www.example.com.").unwrap(), query_type),
             Default::default(),
             &mut client,
             cache.clone(),
-        )
-        .wait()
+        ))
         .expect("lookup failed");
 
         assert_eq!(
@@ -813,7 +816,7 @@ mod tests {
         // the cname should succeed, we shouldn't query again after that, which would cause an error...
         let mut client = mock(vec![error(), srv_message()]);
 
-        let ips = QueryState::lookup(
+        let ips = block_on(QueryState::lookup(
             Query::query(
                 Name::from_str("_443._tcp.www.example.com.").unwrap(),
                 RecordType::SRV,
@@ -821,8 +824,7 @@ mod tests {
             Default::default(),
             &mut client,
             cache.clone(),
-        )
-        .wait()
+        ))
         .expect("lookup failed");
 
         assert_eq!(
@@ -861,7 +863,7 @@ mod tests {
 
         let mut client = mock(vec![error(), Ok(message)]);
 
-        let ips = QueryState::lookup(
+        let ips = block_on(QueryState::lookup(
             Query::query(
                 Name::from_str("_443._tcp.www.example.com.").unwrap(),
                 RecordType::SRV,
@@ -869,8 +871,7 @@ mod tests {
             Default::default(),
             &mut client,
             cache.clone(),
-        )
-        .wait()
+        ))
         .expect("lookup failed");
 
         assert_eq!(
@@ -943,7 +944,7 @@ mod tests {
         let client = CachingClient::with_cache(Arc::clone(&lru), mock(vec![error()]));
 
         let mut query_future = QueryFuture {
-            message_future: future::err(ProtoError::from("no message_future in test")).boxed(),
+            message_future: Box::pin(future::err(ProtoError::from("no message_future in test"))) as _,
             query: Query::query(Name::from_str("ttl.example.com.").unwrap(), RecordType::A),
             cache: lru,
             dnssec: false,
@@ -963,12 +964,11 @@ mod tests {
             RData::A(Ipv4Addr::new(127, 0, 0, 1)),
         )]);
 
-        let poll: Poll<Records> = query_future
-            .handle_noerror(message.into())
-            .expect("handle_noerror failed");
+        let poll = query_future
+            .handle_noerror(message.into());
 
         assert!(poll.is_ready());
-        if let Poll::Ready(records) = poll {
+        if let Poll::Ready(Ok(records)) = poll {
             if let Records::Exists(records) = records {
                 assert!(records.iter().all(|&(_, ttl)| ttl == 1));
             } else {
@@ -993,9 +993,8 @@ mod tests {
 
         {
             let query = Query::query(Name::from_ascii("localhost.").unwrap(), RecordType::A);
-            let lookup = client
-                .lookup(query.clone(), Default::default())
-                .wait()
+            let lookup = block_on(client
+                .lookup(query.clone(), Default::default()))
                 .expect("should have returned localhost");
             assert_eq!(lookup.query(), &query);
             assert_eq!(
@@ -1006,9 +1005,8 @@ mod tests {
 
         {
             let query = Query::query(Name::from_ascii("localhost.").unwrap(), RecordType::AAAA);
-            let lookup = client
-                .lookup(query.clone(), Default::default())
-                .wait()
+            let lookup = block_on(client
+                .lookup(query.clone(), Default::default()))
                 .expect("should have returned localhost");
             assert_eq!(lookup.query(), &query);
             assert_eq!(
@@ -1019,9 +1017,8 @@ mod tests {
 
         {
             let query = Query::query(Name::from(Ipv4Addr::new(127, 0, 0, 1)), RecordType::PTR);
-            let lookup = client
-                .lookup(query.clone(), Default::default())
-                .wait()
+            let lookup = block_on(client
+                .lookup(query.clone(), Default::default()))
                 .expect("should have returned localhost");
             assert_eq!(lookup.query(), &query);
             assert_eq!(
@@ -1035,9 +1032,8 @@ mod tests {
                 Name::from(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)),
                 RecordType::PTR,
             );
-            let lookup = client
-                .lookup(query.clone(), Default::default())
-                .wait()
+            let lookup = block_on(client
+                .lookup(query.clone(), Default::default()))
                 .expect("should have returned localhost");
             assert_eq!(lookup.query(), &query);
             assert_eq!(
@@ -1046,31 +1042,28 @@ mod tests {
             );
         }
 
-        assert!(client
+        assert!(block_on(client
             .lookup(
                 Query::query(Name::from_ascii("localhost.").unwrap(), RecordType::MX),
                 Default::default()
-            )
-            .wait()
+            ))
             .is_err());
 
-        assert!(client
+        assert!(block_on(client
             .lookup(
                 Query::query(Name::from(Ipv4Addr::new(127, 0, 0, 1)), RecordType::MX),
                 Default::default()
-            )
-            .wait()
+            ))
             .is_err());
 
-        assert!(client
+        assert!(block_on(client
             .lookup(
                 Query::query(
                     Name::from(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)),
                     RecordType::MX
                 ),
                 Default::default()
-            )
-            .wait()
+            ))
             .is_err());
     }
 
@@ -1080,15 +1073,14 @@ mod tests {
         let client = mock(vec![empty()]);
         let mut client = CachingClient { lru: cache, client };
 
-        assert!(client
+        assert!(block_on(client
             .lookup(
                 Query::query(
                     Name::from_ascii("horrible.invalid.").unwrap(),
                     RecordType::A,
                 ),
                 Default::default()
-            )
-            .wait()
+            ))
             .is_err());
     }
 
@@ -1106,15 +1098,14 @@ mod tests {
         let client = mock(vec![error(), Ok(message)]);
         let mut client = CachingClient { lru: cache, client };
 
-        assert!(client
+        assert!(block_on(client
             .lookup(
                 Query::query(
                     Name::from_ascii("www.example.local.").unwrap(),
                     RecordType::A,
                 ),
                 Default::default()
-            )
-            .wait()
+            ))
             .is_ok());
     }
 }

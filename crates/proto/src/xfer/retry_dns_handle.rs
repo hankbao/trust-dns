@@ -51,12 +51,12 @@ where
         //  obviously it would be nice to be lazy about this...
         let future = self.handle.send(request.clone());
 
-        Pin::new(Box::new(RetrySendFuture {
+        Box::pin(RetrySendFuture {
             request,
             handle: self.handle.clone(),
             future,
             remaining_attempts: self.attempts,
-        }))
+        })
     }
 }
 

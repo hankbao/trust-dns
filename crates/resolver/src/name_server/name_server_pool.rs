@@ -9,7 +9,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, TryLockError};
 use std::task::Context;
 
-use futures::{future, future::IntoFuture, task, Future, FutureExt, Poll, TryFutureExt};
+use futures::{future, Future, FutureExt, Poll, TryFutureExt};
 use smallvec::SmallVec;
 
 use proto::error::ProtoError;
@@ -166,7 +166,7 @@ where
         let request = mdns.take_request();
 
         // First try the UDP connections
-        Pin::new(Box::new(Self::try_send(opts, datagram_conns, request)
+        Box::pin(Self::try_send(opts, datagram_conns, request)
             .and_then(move |response| {
                 // handling promotion from datagram to stream base on truncation in message
                 if ResponseCode::NoError == response.response_code() && response.truncated() {
@@ -178,7 +178,7 @@ where
                 }
             })
             // if UDP fails, try TCP
-            .or_else(move |_| Self::try_send(opts, stream_conns2, tcp_message2))))
+            .or_else(move |_| Self::try_send(opts, stream_conns2, tcp_message2)))
     }
 }
 
@@ -199,7 +199,7 @@ where
 {
     type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         // TODO: this resolves an odd unsized issue with the loop_fn future
         let inner_future;
 
@@ -260,7 +260,7 @@ where
 // TODO: we should be able to have a self-referential future here with Pin and not require cloned conns
 /// An async function that will loop over all the conns with a max parallel request count of ops.num_concurrent_req
 async fn parallel_conn_loop<C, P>(
-    conns: Vec<NameServer<C, P>>,
+    mut conns: Vec<NameServer<C, P>>,
     request: DnsRequest,
     opts: ResolverOpts,
 ) -> Result<DnsResponse, ProtoError>
@@ -286,7 +286,7 @@ where
         } else {
             par_conns
                 .into_iter()
-                .map(move |mut conn| conn.send(request.clone()))
+                .map(move |mut conn| conn.send(request_cont.clone()))
         };
 
         match future::select_ok(requests).await {
@@ -368,7 +368,7 @@ impl Local {
 impl Future for Local {
     type Output = Result<DnsResponse, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match *self {
             Local::ResolveFuture(ref mut ns) => ns.as_mut().poll(cx),
             // TODO: making this a panic for now

@@ -318,7 +318,7 @@ enum ConnectionHandleResponseInner {
 impl Future for ConnectionHandleResponseInner {
     type Output = Result<DnsResponse, proto::error::ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         use self::ConnectionHandleResponseInner::*;
 
         trace!("polling response inner");
@@ -353,7 +353,7 @@ pub struct ConnectionHandleResponse(ConnectionHandleResponseInner);
 impl Future for ConnectionHandleResponse {
     type Output = Result<DnsResponse, proto::error::ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.0.poll_unpin(cx)
     }
 }

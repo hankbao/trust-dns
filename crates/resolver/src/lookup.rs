@@ -273,18 +273,21 @@ impl<C: DnsHandle + 'static> Future for LookupFuture<C> {
                 // If the query returned a successful lookup, we will attempt
                 // to retry if the lookup is empty. Otherwise, we will return
                 // that lookup.
-                Poll::Ready(Ok(lookup)) => lookup.records.len() == 0,
+                Poll::Ready(Ok(ref lookup)) => lookup.records.len() == 0,
                 // If the query failed, we will attempt to retry.
                 Poll::Ready(Err(_)) => true,
             };
 
             if should_retry {
                 if let Some(name) = self.names.pop() {
+                    let record_type = self.record_type;
+                    let options = self.options.clone();
+
                     // If there's another name left to try, build a new query
                     // for that next name and continue looping.
                     self.query = self
                         .client_cache
-                        .lookup(Query::query(name, self.record_type), self.options.clone());
+                        .lookup(Query::query(name, record_type), options);
                     // Continue looping with the new query. It will be polled
                     // on the next iteration of the loop.
                     continue;
@@ -386,7 +389,7 @@ impl From<LookupFuture> for SrvLookupFuture {
 impl Future for SrvLookupFuture {
     type Output = Result<SrvLookup, ResolveError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match self.0.poll_unpin(cx) {
             Poll::Ready(Ok(lookup)) => Poll::Ready(Ok(SrvLookup(lookup))),
             Poll::Pending => Poll::Pending,
@@ -475,7 +478,7 @@ macro_rules! lookup_type {
         impl Future for $f {
             type Output = Result<$l, ResolveError>;
 
-            fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
                 match self.0.poll_unpin(cx) {
                     Poll::Ready(Ok(lookup)) => Poll::Ready(Ok($l(lookup))),
                     Poll::Pending => Poll::Pending,

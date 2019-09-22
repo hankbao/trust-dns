@@ -76,7 +76,7 @@ impl Resolver {
         let mut builder = runtime::Builder::new();
         builder.core_threads(1);
 
-        let mut runtime = builder.build()?;
+        let runtime = builder.build()?;
         let (async_resolver, bg) = AsyncResolver::new(config, options);
 
         runtime.spawn(bg);

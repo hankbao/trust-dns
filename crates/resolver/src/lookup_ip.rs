@@ -123,7 +123,7 @@ where
 impl<C: DnsHandle + 'static> Future for LookupIpFuture<C> {
     type Output = Result<LookupIp, ResolveError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             // Try polling the underlying DNS query.
             let query = self.query.as_mut().poll(cx);
@@ -422,7 +422,7 @@ pub mod tests {
     use std::sync::{Arc, Mutex};
 
     use futures::{future, Future};
-    use tokio::reactor::Reactor;
+    use futures::executor::block_on;
 
     use proto::error::{ProtoError, ProtoResult};
     use proto::op::Message;
@@ -440,9 +440,9 @@ pub mod tests {
         type Response = Pin<Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send + Unpin>>;
 
         fn send<R: Into<DnsRequest>>(&mut self, _: R) -> Self::Response {
-            future::ready(
+            Box::pin(future::ready(
                 self.messages.lock().unwrap().pop().unwrap_or_else(empty),
-            ).boxed()
+            ))
         }
     }
 
@@ -482,17 +482,13 @@ pub mod tests {
 
     #[test]
     fn test_ipv4_only_strategy() {
-        use tokio_executor;
-        let mut enter = tokio_executor::enter().expect("Tokio Enter error");
-
         assert_eq!(
-            ipv4_only(
+            block_on(ipv4_only(
                 Name::root(),
                 CachingClient::new(0, mock(vec![v4_message()])),
                 Default::default(),
                 None,
-            )
-            .wait()
+            ))
             .unwrap()
             .iter()
             .map(|r| r.to_ip_addr().unwrap())
@@ -503,17 +499,13 @@ pub mod tests {
 
     #[test]
     fn test_ipv6_only_strategy() {
-        use tokio_executor;
-        let mut enter = tokio_executor::enter().expect("Tokio Enter error");
-
         assert_eq!(
-            ipv6_only(
+            block_on(ipv6_only(
                 Name::root(),
                 CachingClient::new(0, mock(vec![v6_message()])),
                 Default::default(),
                 None,
-            )
-            .wait()
+            ))
             .unwrap()
             .iter()
             .map(|r| r.to_ip_addr().unwrap())
@@ -524,13 +516,10 @@ pub mod tests {
 
     #[test]
     fn test_ipv4_and_ipv6_strategy() {
-        use tokio_executor;
-        let mut enter = tokio_executor::enter().expect("Tokio Enter error");
-
         // ipv6 is consistently queried first (even though the select has it second)
         // both succeed
         assert_eq!(
-            enter.block_on(ipv4_and_ipv6(
+            block_on(ipv4_and_ipv6(
                 Name::root(),
                 CachingClient::new(0, mock(vec![v6_message(), v4_message()])),
                 Default::default(),
@@ -548,7 +537,7 @@ pub mod tests {
 
         // only ipv4 available
         assert_eq!(
-            enter.block_on(ipv4_and_ipv6(
+            block_on(ipv4_and_ipv6(
                 Name::root(),
                 CachingClient::new(0, mock(vec![empty(), v4_message()])),
                 Default::default(),
@@ -563,7 +552,7 @@ pub mod tests {
 
         // error then ipv4
         assert_eq!(
-            enter.block_on(ipv4_and_ipv6(
+            block_on(ipv4_and_ipv6(
                 Name::root(),
                 CachingClient::new(0, mock(vec![error(), v4_message()])),
                 Default::default(),
@@ -578,7 +567,7 @@ pub mod tests {
 
         // only ipv6 available
         assert_eq!(
-            enter.block_on(ipv4_and_ipv6(
+            block_on(ipv4_and_ipv6(
                 Name::root(),
                 CachingClient::new(0, mock(vec![v6_message(), empty()])),
                 Default::default(),
@@ -593,7 +582,7 @@ pub mod tests {
 
         // error, then only ipv6 available
         assert_eq!(
-            enter.block_on(ipv4_and_ipv6(
+            block_on(ipv4_and_ipv6(
                 Name::root(),
                 CachingClient::new(0, mock(vec![v6_message(), error()])),
                 Default::default(),
@@ -609,18 +598,14 @@ pub mod tests {
 
     #[test]
     fn test_ipv6_then_ipv4_strategy() {
-        use tokio_executor;
-        let mut enter = tokio_executor::enter().expect("Tokio Enter error");
-
         // ipv6 first
         assert_eq!(
-            enter.block_on(ipv6_then_ipv4(
+            block_on(ipv6_then_ipv4(
                 Name::root(),
                 CachingClient::new(0, mock(vec![v6_message()])),
                 Default::default(),
                 None,
             ))
-            .wait()
             .unwrap()
             .iter()
             .map(|r| r.to_ip_addr().unwrap())
@@ -630,7 +615,7 @@ pub mod tests {
 
         // nothing then ipv4
         assert_eq!(
-            enter.block_on(ipv6_then_ipv4(
+            block_on(ipv6_then_ipv4(
                 Name::root(),
                 CachingClient::new(0, mock(vec![v4_message(), empty()])),
                 Default::default(),
@@ -645,7 +630,7 @@ pub mod tests {
 
         // ipv4 and error
         assert_eq!(
-            enter.block_on(ipv6_then_ipv4(
+            block_on(ipv6_then_ipv4(
                 Name::root(),
                 CachingClient::new(0, mock(vec![v4_message(), error()])),
                 Default::default(),
@@ -661,12 +646,9 @@ pub mod tests {
 
     #[test]
     fn test_ipv4_then_ipv6_strategy() {
-        use tokio_executor;
-        let mut enter = tokio_executor::enter().expect("Tokio Enter error");
-
         // ipv6 first
         assert_eq!(
-            enter.block_on(ipv4_then_ipv6(
+            block_on(ipv4_then_ipv6(
                 Name::root(),
                 CachingClient::new(0, mock(vec![v4_message()])),
                 Default::default(),
@@ -681,7 +663,7 @@ pub mod tests {
 
         // nothing then ipv6
         assert_eq!(
-            enter.block_on(ipv4_then_ipv6(
+            block_on(ipv4_then_ipv6(
                 Name::root(),
                 CachingClient::new(0, mock(vec![v6_message(), empty()])),
                 Default::default(),
@@ -696,7 +678,7 @@ pub mod tests {
 
         // error then ipv6
         assert_eq!(
-            enter.block_on(ipv4_then_ipv6(
+            block_on(ipv4_then_ipv6(
                 Name::root(),
                 CachingClient::new(0, mock(vec![v6_message(), error()])),
                 Default::default(),
