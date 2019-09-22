@@ -6,14 +6,15 @@
 // copied, modified, or distributed except according to those terms.
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::pin::Pin;
 
 use futures::Future;
 use proto::error::ProtoError;
 use proto::xfer::{DnsHandle, DnsRequest, DnsResponse};
 
-use client::rc_future::{rc_future, RcFuture};
-use client::ClientHandle;
-use op::Query;
+use crate::client::rc_future::{rc_future, RcFuture};
+use crate::client::ClientHandle;
+use crate::op::Query;
 
 // TODO: move to proto
 /// A ClientHandle for memoized (cached) responses to queries.
@@ -45,7 +46,7 @@ impl<H> DnsHandle for MemoizeClientHandle<H>
 where
     H: ClientHandle,
 {
-    type Response = Pin<Box<dyn Future<Item = DnsResponse, Error = ProtoError> + Send>>;
+    type Response = Pin<Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send>>;
 
     fn send<R: Into<DnsRequest>>(&mut self, request: R) -> Self::Response {
         let request = request.into();
@@ -53,7 +54,7 @@ where
 
         if let Some(rc_future) = self.active_queries.lock().expect("poisoned").get(&query) {
             // FIXME check TTLs?
-            return Box::new(rc_future.clone());
+            return Box::pin(rc_future.clone());
         }
 
         // check if there are active queries
@@ -61,7 +62,7 @@ where
             let map = self.active_queries.lock().expect("poisoned");
             let request = map.get(&query);
             if request.is_some() {
-                return Box::new(request.unwrap().clone());
+                return Box::pin(request.unwrap().clone());
             }
         }
 
@@ -69,19 +70,22 @@ where
         let mut map = self.active_queries.lock().expect("poisoned");
         map.insert(query, request.clone());
 
-        Box::new(request)
+        Box::pin(request)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use client::*;
+    use std::cell::Cell;
+    use std::pin::Pin;
+
     use futures::*;
-    use op::*;
     use proto::error::ProtoError;
     use proto::xfer::{DnsHandle, DnsRequest, DnsResponse};
-    use rr::*;
-    use std::cell::Cell;
+
+    use crate::client::*;
+    use crate::op::*;
+    use crate::rr::*;
 
     #[derive(Clone)]
     struct TestClient {
@@ -89,7 +93,7 @@ mod test {
     }
 
     impl DnsHandle for TestClient {
-        type Response = Box<dyn Future<Item = DnsResponse, Error = ProtoError> + Send>;
+        type Response = Pin<Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send>>;
 
         fn send<R: Into<DnsRequest>>(&mut self, _: R) -> Self::Response {
             let mut message = Message::new();
@@ -98,12 +102,14 @@ mod test {
             message.set_id(i);
             self.i.set(i + 1);
 
-            Box::new(finished(message.into()))
+            Box::pin(future::ok(message.into()))
         }
     }
 
     #[test]
     fn test_memoized() {
+        use futures::executor::block_on;
+
         let mut client = MemoizeClientHandle::new(TestClient { i: Cell::new(0) });
 
         let mut test1 = Message::new();
@@ -112,17 +118,17 @@ mod test {
         let mut test2 = Message::new();
         test2.add_query(Query::new().set_query_type(RecordType::AAAA).clone());
 
-        let result = client.send(test1.clone()).wait().ok().unwrap();
+        let result = block_on(client.send(test1.clone())).ok().unwrap();
         assert_eq!(result.id(), 0);
 
-        let result = client.send(test2.clone()).wait().ok().unwrap();
+        let result = block_on(client.send(test2.clone())).ok().unwrap();
         assert_eq!(result.id(), 1);
 
         // should get the same result for each...
-        let result = client.send(test1).wait().ok().unwrap();
+        let result = block_on(client.send(test1)).ok().unwrap();
         assert_eq!(result.id(), 0);
 
-        let result = client.send(test2).wait().ok().unwrap();
+        let result = block_on(client.send(test2)).ok().unwrap();
         assert_eq!(result.id(), 1);
     }
 
