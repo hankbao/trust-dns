@@ -128,12 +128,12 @@ impl<C: DnsHandle + 'static> CachingClient<C> {
             }
         }
 
-        Box::new(QueryState::lookup(
+        QueryState::lookup(
             query,
             options,
             &mut self.client,
             self.lru.clone(),
-        ))
+        ).boxed()
     }
 }
 
@@ -159,7 +159,7 @@ impl Future for FromCache {
             // TODO: need to figure out a way to recover from this.
             // It requires unwrapping the poisoned error and recreating the Mutex at a higher layer...
             Err(TryLockError::Poisoned(poison)) => {
-                Err(ResolveErrorKind::Msg(format!("poisoned: {}", poison)).into())
+                Poll::Ready(Err(ResolveErrorKind::Msg(format!("poisoned: {}", poison)).into()))
             }
             Ok(mut lru) => Poll::Ready(Ok(lru.get(&self.query, Instant::now()))),
         }
@@ -359,7 +359,7 @@ impl<C: DnsHandle + 'static> Future for QueryFuture<C> {
     type Output = Result<Records, ResolveError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        match self.message_future.poll(cx) {
+        match self.message_future.poll_unpin(cx) {
             Poll::Ready(Ok(message)) => {
                 // TODO: take all records and cache them?
                 //  if it's DNSSec they must be signed, otherwise?
@@ -369,7 +369,7 @@ impl<C: DnsHandle + 'static> Future for QueryFuture<C> {
                         message, false, /* false b/c DNSSec should not cache NXDomain */
                     ))),
                     ResponseCode::NoError => self.handle_noerror(message),
-                    r => Err(ResolveErrorKind::Msg(format!("DNS Error: {}", r)).into()),
+                    r => Poll::Ready(Err(ResolveErrorKind::Msg(format!("DNS Error: {}", r)).into())),
                 }
             }
             Poll::Pending => Poll::Pending,
@@ -400,7 +400,7 @@ impl Future for InsertCache {
             // TODO: need to figure out a way to recover from this.
             // It requires unwrapping the poisoned error and recreating the Mutex at a higher layer...
             Err(TryLockError::Poisoned(poison)) => {
-                Err(ResolveErrorKind::Msg(format!("poisoned: {}", poison)).into())
+                Poll::Ready(Err(ResolveErrorKind::Msg(format!("poisoned: {}", poison)).into()))
             }
             Ok(mut lru) => {
                 // this will put this object into an inconsistent state, but no one should call poll again...
@@ -421,10 +421,10 @@ impl Future for InsertCache {
                         Instant::now(),
                     ))),
                     Records::NoData { ttl: Some(ttl) } => {
-                        Err(lru.negative(query, ttl, Instant::now()))
+                        Poll::Ready(Err(lru.negative(query, ttl, Instant::now())))
                     }
                     Records::NoData { ttl: None } | Records::CnameChain { .. } => {
-                        Err(DnsLru::nx_error(query, None))
+                        Poll::Ready(Err(DnsLru::nx_error(query, None)))
                     }
                 }
             }
@@ -436,7 +436,7 @@ enum QueryState<C: DnsHandle + 'static> {
     /// In the FromCache state we evaluate cache entries for any results
     FromCache(FromCache, C),
     /// In the query state there is an active query that's been started, see Self::lookup()
-    Query(Pin<QueryFuture<C>>),
+    Query(QueryFuture<C>),
     /// CNAME lookup (internally it is making cached queries
     CnameChain(
         Pin<Box<dyn Future<Output = Result<Lookup, ResolveError>> + Send>>,
@@ -445,7 +445,7 @@ enum QueryState<C: DnsHandle + 'static> {
         Arc<Mutex<DnsLru>>,
     ),
     /// State of adding the item to the cache
-    InsertCache(Pin<InsertCache>),
+    InsertCache(InsertCache),
     /// A state which should not occur
     QueryError,
 }
@@ -585,18 +585,18 @@ impl<C: DnsHandle + 'static> Future for QueryState<C> {
         let records: Option<Records>;
         match *self {
             QueryState::FromCache(ref mut from_cache, ..) => {
-                match from_cache.poll(cx) {
+                match from_cache.poll_unpin(cx) {
                     // need to query since it wasn't in the cache
                     Poll::Ready(Ok(None)) => (), // handled below
                     Poll::Ready(Ok(Some(ips))) => return Poll::Ready(Ok(ips)),
                     Poll::Pending => return Poll::Pending,
-                    Err(error) => return Err(error),
+                    Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 };
 
                 records = None;
             }
             QueryState::Query(ref mut query, ..) => {
-                let poll = query.as_mut().poll(cx);
+                let poll = query.poll_unpin(cx);
                 match poll {
                     Poll::Pending => {
                         return Poll::Pending;
@@ -608,7 +608,7 @@ impl<C: DnsHandle + 'static> Future for QueryState<C> {
                 }
             }
             QueryState::CnameChain(ref mut future, _, ttl, _) => {
-                let poll = future.poll(cx);
+                let poll = future.as_mut().poll(cx);
                 match poll {
                     Poll::Pending => {
                         return Poll::Pending;
@@ -625,7 +625,7 @@ impl<C: DnsHandle + 'static> Future for QueryState<C> {
                 }
             }
             QueryState::InsertCache(ref mut insert_cache) => {
-                return insert_cache.poll(cx);
+                return insert_cache.poll_unpin(cx);
             }
             QueryState::QueryError => panic!("invalid error state"),
         }

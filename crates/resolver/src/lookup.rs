@@ -261,7 +261,7 @@ impl<C: DnsHandle + 'static> LookupFuture<C> {
 impl<C: DnsHandle + 'static> Future for LookupFuture<C> {
     type Output = Result<Lookup, ResolveError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             // Try polling the underlying DNS query.
             let query = self.query.as_mut().poll_unpin(cx);
@@ -535,6 +535,7 @@ pub mod tests {
     use std::sync::{Arc, Mutex};
 
     use futures::{future, Future};
+    use futures::executor::block_on;
 
     use proto::error::{ProtoErrorKind, ProtoResult};
     use proto::op::Message;
@@ -585,13 +586,12 @@ pub mod tests {
     #[test]
     fn test_lookup() {
         assert_eq!(
-            LookupFuture::lookup(
+            block_on(LookupFuture::lookup(
                 vec![Name::root()],
                 RecordType::A,
                 DnsRequestOptions::default(),
                 CachingClient::new(0, mock(vec![v4_message()])),
-            )
-            .wait()
+            ))
             .unwrap()
             .iter()
             .map(|r| r.to_ip_addr().unwrap())
@@ -603,13 +603,12 @@ pub mod tests {
     #[test]
     fn test_lookup_into_iter() {
         assert_eq!(
-            LookupFuture::lookup(
+            block_on(LookupFuture::lookup(
                 vec![Name::root()],
                 RecordType::A,
                 DnsRequestOptions::default(),
                 CachingClient::new(0, mock(vec![v4_message()])),
-            )
-            .wait()
+            ))
             .unwrap()
             .into_iter()
             .map(|r| r.to_ip_addr().unwrap())
@@ -620,26 +619,24 @@ pub mod tests {
 
     #[test]
     fn test_error() {
-        assert!(LookupFuture::lookup(
+        assert!(block_on(LookupFuture::lookup(
             vec![Name::root()],
             RecordType::A,
             DnsRequestOptions::default(),
             CachingClient::new(0, mock(vec![error()])),
-        )
-        .wait()
+        ))
         .is_err());
     }
 
     #[test]
     fn test_empty_no_response() {
         assert_eq!(
-            *LookupFuture::lookup(
+            *block_on(LookupFuture::lookup(
                 vec![Name::root()],
                 RecordType::A,
                 DnsRequestOptions::default(),
                 CachingClient::new(0, mock(vec![empty()])),
-            )
-            .wait()
+            ))
             .unwrap_err()
             .kind(),
             ResolveErrorKind::NoRecordsFound {

@@ -43,7 +43,7 @@ pub(super) fn task(
     options: ResolverOpts,
     lru: Arc<Mutex<DnsLru>>,
     request_rx: mpsc::UnboundedReceiver<Request>,
-) -> Pin<Box<Future<Output = ()>>> {
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
     future::lazy(move |_| {
         debug!("trust-dns resolver running");
 
@@ -203,7 +203,7 @@ impl Task {
 impl Future for Task {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             let poll = self.request_rx.poll_next_unpin(cx);
             match ready!(poll) {

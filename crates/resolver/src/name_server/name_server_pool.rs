@@ -9,7 +9,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, TryLockError};
 use std::task::Context;
 
-use futures::{future, future::IntoFuture, task, Future, Poll};
+use futures::{future, future::IntoFuture, task, Future, FutureExt, Poll, TryFutureExt};
 use smallvec::SmallVec;
 
 use proto::error::ProtoError;
@@ -164,22 +164,21 @@ where
 
         // it wasn't a local query, continue with standard lookup path
         let request = mdns.take_request();
-        Box::new(
-            // First try the UDP connections
-            Self::try_send(opts, datagram_conns, request)
-                .and_then(move |response| {
-                    // handling promotion from datagram to stream base on truncation in message
-                    if ResponseCode::NoError == response.response_code() && response.truncated() {
-                        // TCP connections should not truncate
-                        future::Either::A(Self::try_send(opts, stream_conns1, tcp_message1))
-                    } else {
-                        // Return the result from the UDP connection
-                        future::Either::B(future::ok(response))
-                    }
-                })
-                // if UDP fails, try TCP
-                .or_else(move |_| Self::try_send(opts, stream_conns2, tcp_message2)),
-        )
+
+        // First try the UDP connections
+        Pin::new(Box::new(Self::try_send(opts, datagram_conns, request)
+            .and_then(move |response| {
+                // handling promotion from datagram to stream base on truncation in message
+                if ResponseCode::NoError == response.response_code() && response.truncated() {
+                    // TCP connections should not truncate
+                    future::Either::Left(Self::try_send(opts, stream_conns1, tcp_message1))
+                } else {
+                    // Return the result from the UDP connection
+                    future::Either::Right(future::ok(response))
+                }
+            })
+            // if UDP fails, try TCP
+            .or_else(move |_| Self::try_send(opts, stream_conns2, tcp_message2))))
     }
 }
 
@@ -216,7 +215,7 @@ where
                 match conns {
                     Err(TryLockError::Poisoned(_)) => {
                         // TODO: what to do on poisoned errors? this is non-recoverable, right?
-                        return Err(ProtoError::from("Lock Poisoned"));
+                        return Poll::Ready(Err(ProtoError::from("Lock Poisoned")));
                     }
                     Err(TryLockError::WouldBlock) => {
                         // since there is nothing registered with Tokio, we need to yield...
@@ -241,7 +240,7 @@ where
                         let request = request.expect("bad state, message should never be None");
                         let request_loop = request.clone();
 
-                        let loop_future = parallel_conn_loop(conns, request_loop).boxed();
+                        let loop_future = parallel_conn_loop(conns, request_loop, opts).boxed();
                         inner_future = loop_future;
                     }
                 }
@@ -298,8 +297,6 @@ where
                 continue;
             }
         };
-
-        unreachable!();
     }
 }
 
@@ -330,7 +327,7 @@ mod mdns {
 
 pub enum Local {
     #[allow(dead_code)]
-    ResolveFuture(Pin<Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send>>),
+    ResolveFuture(Pin<Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send + Unpin>>),
     NotMdns(DnsRequest),
 }
 
@@ -348,7 +345,7 @@ impl Local {
     /// # Panics
     ///
     /// Panics if this is in fact a Local::NotMdns
-    fn take_future(self) -> Pin<Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send>> {
+    fn take_future(self) -> Pin<Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send + Unpin>> {
         match self {
             Local::ResolveFuture(future) => future,
             _ => panic!("non Local queries have no future, see take_message()"),

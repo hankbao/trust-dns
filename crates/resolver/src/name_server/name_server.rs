@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::pin::Pin;
 
-use futures::{future, Future, FutureExt};
+use futures::{future, Future, FutureExt, TryFutureExt};
 
 use proto::error::{ProtoError, ProtoResult};
 #[cfg(feature = "mdns")]
@@ -132,12 +132,11 @@ where
         // if state is failed, return future::err(), unless retry delay expired...
         let client = match self.connected_mut_client() {
             Ok(client) => client,
-            Err(e) => return future::err(e).boxed() as Self::Response,
+            Err(e) => return Pin::new(Box::new(future::err(e))) as Self::Response,
         };
 
         // Because a Poisoned lock error could have occurred, make sure to create a new Mutex...
-        Box::new(
-            client
+        Pin::new(Box::new(client
                 .send(request)
                 .and_then(move |response| {
                     // first we'll evaluate if the message succeeded
@@ -177,8 +176,9 @@ where
 
                     // These are connection failures, not lookup failures, that is handled in the resolver layer
                     future::err(error)
-                }),
-        )
+                })
+        ))
+        
     }
 }
 

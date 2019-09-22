@@ -138,7 +138,7 @@ impl ConnectionHandleConnect {
                 }).map(|_| ());
                 let handle = BufDnsRequestStreamHandle::new(handle);
 
-                DefaultExecutor::current().spawn(Pin::new(Box::new(stream)))?;
+                DefaultExecutor::current().spawn(stream.boxed())?;
                 Ok(ConnectionHandleConnected::Udp(handle))
             }
             Tcp {
@@ -161,7 +161,7 @@ impl ConnectionHandleConnect {
                 }).map(|_|());
                 let handle = BufDnsRequestStreamHandle::new(handle);
 
-                DefaultExecutor::current().spawn(Pin::new(Box::new(stream)))?;
+                DefaultExecutor::current().spawn(stream.boxed())?;
                 Ok(ConnectionHandleConnected::Tcp(handle))
             }
             #[cfg(feature = "dns-over-tls")]
@@ -332,12 +332,12 @@ impl Future for ConnectionHandleResponseInner {
                     Ok(mut c) => c.send(request.take().expect("already sent request?")),
                     Err(e) => ProtoError(Some(proto::error::ProtoError::from(e))),
                 },
-                Udp(ref mut resp) => return resp.as_mut().poll(cx),
-                Tcp(ref mut resp) => return resp.as_mut().poll(cx),
+                Udp(ref mut resp) => return resp.poll_unpin(cx),
+                Tcp(ref mut resp) => return resp.poll_unpin(cx),
                 #[cfg(feature = "dns-over-https")]
-                Https(ref mut https) => return https.as_mut().poll(cx),
+                Https(ref mut https) => return https.poll_unpin(cx),
                 ProtoError(ref mut e) => {
-                    return Err(e.take().expect("futures cannot be polled once complete"));
+                    return Poll::Ready(Err(e.take().expect("futures cannot be polled once complete")));
                 }
             };
 
@@ -354,6 +354,6 @@ impl Future for ConnectionHandleResponse {
     type Output = Result<DnsResponse, proto::error::ProtoError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        self.0.poll(cx)
+        self.0.poll_unpin(cx)
     }
 }

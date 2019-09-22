@@ -160,7 +160,7 @@ impl AsyncResolver {
     pub fn new(
         config: ResolverConfig,
         options: ResolverOpts,
-    ) -> (Self, impl Future<Output = ()>) {
+    ) -> (Self, impl Future<Output = ()> + Send) {
         let lru = DnsLru::new(options.cache_size, dns_lru::TtlConfig::from_opts(&options));
         let lru = Arc::new(Mutex::new(lru));
 
@@ -185,7 +185,7 @@ impl AsyncResolver {
         config: ResolverConfig,
         options: ResolverOpts,
         lru: Arc<Mutex<DnsLru>>,
-    ) -> (Self, impl Future<Output = ()>) {
+    ) -> (Self, impl Future<Output = ()> + Send) {
         let (request_tx, request_rx) = mpsc::unbounded();
         let background = background::task(config, options, lru, request_rx);
         let handle = Self { request_tx };
@@ -349,11 +349,11 @@ where
     }
 }
 
-impl<E, F, G> From<E> for Background<F, G>
+impl<TF, TG, E, F, G> From<E> for Background<F, G>
 where
     E: Into<ResolveError>,
-    F: Future,
-    G: Future,
+    F: Future<Output = Result<TF, ResolveError>>,
+    G: Future<Output = Result<TG, ResolveError>>,
 {
     fn from(err: E) -> Self {
         Background {
@@ -494,8 +494,7 @@ mod tests {
         thread::spawn(move || {
             let mut background_runtime = Runtime::new().unwrap();
             background_runtime
-                .block_on(bg)
-                .expect("background task failed");
+                .block_on(bg);
         });
 
         let response = io_loop
