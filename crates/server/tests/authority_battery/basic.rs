@@ -600,7 +600,7 @@ macro_rules! define_basic_test {
             #[test]
             fn $f () {
                 let authority = ::$new("tests/named_test_configs/example.com.zone", module_path!(), stringify!($f));
-                ::authority_battery::basic::$f(authority);
+                crate::authority_battery::basic::$f(authority);
             }
         )*
     }

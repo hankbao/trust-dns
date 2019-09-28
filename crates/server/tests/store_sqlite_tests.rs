@@ -66,8 +66,8 @@ fn sqlite_update(master_file_path: &str, module: &str, test_name: &str) -> Sqlit
     ).expect("failed to load file")
 }
 
-basic_battery!(sqlite);
+basic_battery!(crate::sqlite);
 #[cfg(feature = "dnssec")]
-dnssec_battery!(sqlite);
+dnssec_battery!(crate::sqlite);
 #[cfg(feature = "dnssec")]
-dynamic_update!(sqlite_update);
+dynamic_update!(crate::sqlite_update);

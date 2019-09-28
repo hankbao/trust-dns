@@ -5,7 +5,7 @@ extern crate trust_dns_server;
 
 use std::io;
 use std::time::Duration;
-use futures::{Async, Poll};
+use futures::Poll;
 #[allow(deprecated)]
 use futures::stream::{iter, Stream};
 use tokio::runtime::current_thread::Runtime;
@@ -45,12 +45,11 @@ fn test_no_timeout() {
 struct NeverStream {}
 
 impl Stream for NeverStream {
-    type Item = ();
-    type Error = io::Error;
+    type Item = Result<(), io::Error>;
 
     // somehow insert a timeout here...
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        Ok(Async::NotReady)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Result<Self::Item, Self::Error>>> {
+        Poll::Pending
     }
 }
 
