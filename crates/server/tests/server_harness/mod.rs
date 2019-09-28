@@ -70,6 +70,8 @@ where
         .spawn()
         .expect("failed to start named");
 
+    println!("server starting");
+
     let mut named_out = BufReader::new(mem::replace(&mut named.stdout, None).expect("no stdout"));
 
     // forced thread killer
@@ -127,7 +129,8 @@ where
             .read_line(&mut output)
             .expect("could not read stdout");
         if !output.is_empty() {
-            info!("SRV: {}", output.trim_end());
+            // uncomment for debugging
+            // println!("SRV: {}", output.trim_end());
         }
         if output.contains("awaiting connections...") {
             found = true;
@@ -137,6 +140,7 @@ where
 
     stdout().flush().unwrap();
     assert!(found);
+    println!("server started");
 
     // spawn a thread to capture stdout
     let succeeded_clone = succeeded.clone();
@@ -150,7 +154,8 @@ where
                     .read_line(&mut output)
                     .expect("could not read stdout");
                 if !output.is_empty() {
-                    info!("SRV: {}", output.trim_end());
+                    // uncomment for debugging
+                    // println!("SRV: {}", output.trim_end());
                 }
             }
         })

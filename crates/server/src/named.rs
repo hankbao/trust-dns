@@ -461,7 +461,8 @@ pub fn main() {
             ()
         }));
 
-    io_loop.block_on(server_future);
+    io_loop.spawn(server_future);
+    io_loop.shutdown_on_idle();
 
     // we're exiting for some reason...
     info!("Trust-DNS {} stopping", trust_dns::version());
