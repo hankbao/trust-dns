@@ -9,24 +9,27 @@ use std::fmt::{self, Display};
 use std::mem;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::pin::Pin;
+use std::task::Context;
+use std::io;
 
 use bytes::Bytes;
-use futures::{Async, Future, Poll, Stream};
-use h2::client::{Handshake, SendRequest};
+use futures::{Future, FutureExt, Poll, Stream, StreamExt};
+use h2::client::{Connection, SendRequest};
 use h2::{self, RecvStream};
 use http::header;
 use http::{Response, StatusCode};
 use rustls::{Certificate, ClientConfig};
 use tokio_executor;
 use tokio_rustls::{client::TlsStream as TokioTlsClientStream, Connect, TlsConnector};
-use tokio_tcp::{ConnectFuture, TcpStream as TokioTcpStream};
+use tokio_net::tcp::{TcpStream as TokioTcpStream};
 use typed_headers::{ContentLength, HeaderMapExt};
 use webpki::DNSNameRef;
 
 use trust_dns_proto::error::ProtoError;
 use trust_dns_proto::xfer::{DnsRequest, DnsRequestSender, DnsResponse, SerialMessage};
 
-use HttpsError;
+use crate::HttpsError;
 
 const ALPN_H2: &[u8] = b"h2";
 
@@ -92,21 +95,19 @@ impl DnsRequestSender for HttpsClientStream {
 }
 
 impl Stream for HttpsClientStream {
-    type Item = ();
-    type Error = ProtoError;
+    type Item = Result<(), ProtoError>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         if self.is_shutdown {
-            return Ok(Async::Ready(None));
+            return Poll::Ready(None);
         }
 
         // just checking if the connection is ok
-        self.h2
-            .poll_ready()
-            .map(|readiness| match readiness {
-                Async::Ready(()) => Async::Ready(Some(())),
-                Async::NotReady => Async::NotReady,
-            }).map_err(|e| ProtoError::from(format!("h2 stream errored: {}", e)))
+        match self.h2.poll_ready(cx) {
+            Poll::Ready(Ok(r)) => Poll::Ready(Some(Ok(r))),
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) => Poll::Ready(Some(Err(ProtoError::from(format!("h2 stream errored: {}", e))))),
+        }
     }
 }
 
@@ -115,9 +116,8 @@ impl Stream for HttpsClientStream {
 pub struct HttpsSerialResponse(HttpsSerialResponseInner);
 
 impl Future for HttpsSerialResponse {
-    type Item = DnsResponse;
     // FIXME: make changes to allow this to be a crate specific error type
-    type Error = ProtoError;
+    type Output = Result<DnsResponse, ProtoError>;
 
     /// This indicates that the HTTP message was successfully sent, and we now have the response.RecvStream
     ///
@@ -166,14 +166,14 @@ impl Future for HttpsSerialResponse {
     ///    (Unsupported Media Type) upon receiving a media type it is unable to
     ///    process.
     /// ```
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let serial_message = try_ready!(
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let serial_message = ready!(
             self.0
-                .poll()
+                .poll_unpin(cx)
                 .map_err(|e| ProtoError::from(format!("https error: {}", e)))
-        );
+        )?;
         let message = serial_message.to_message()?;
-        Ok(Async::Ready(message.into()))
+        Poll::Ready(Ok(message.into()))
     }
 }
 
@@ -204,33 +204,32 @@ enum HttpsSerialResponseInner {
 }
 
 impl Future for HttpsSerialResponseInner {
-    type Item = SerialMessage;
-    type Error = HttpsError;
+    type Output = Result<SerialMessage, HttpsError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             use self::HttpsSerialResponseInner::*;
 
-            let next = match self {
+            let next = match *self {
                 StartSend {
                     ref mut h2,
                     message,
                     name_server_name,
                     name_server,
                 } => {
-                    match h2.poll_ready() {
-                        Ok(Async::Ready(())) => (),
-                        Ok(Async::NotReady) => return Ok(Async::NotReady),
-                        Err(err) => {
+                    match h2.poll_ready(cx) {
+                        Poll::Ready(Ok(())) => (),
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(Err(err)) => {
                             // TODO: make specific error
-                            return Err(HttpsError::from(format!("h2 send_request error: {}", err)));
+                            return Poll::Ready(Err(HttpsError::from(format!("h2 send_request error: {}", err))));
                         }
                     };
 
                     // build up the http request
 
                     let bytes = Bytes::from(message.bytes());
-                    let request = ::request::new(&name_server_name, bytes.len());
+                    let request = crate::request::new(&name_server_name, bytes.len());
 
                     let request = request
                         .map_err(|err| ProtoError::from(format!("bad http request: {}", err)))?;
@@ -250,7 +249,7 @@ impl Future for HttpsSerialResponseInner {
                     HttpsSerialResponseInner::Incoming {
                         response_future,
                         _response_send_stream: send_stream,
-                        name_server: *name_server,
+                        name_server: name_server,
                     }
                 }
                 Incoming {
@@ -259,9 +258,9 @@ impl Future for HttpsSerialResponseInner {
                     ..
                 } => {
                     let response_stream =
-                        try_ready!(response_future.poll().map_err(|err| ProtoError::from(
+                        ready!(response_future.poll_unpin(cx).map_err(|err| ProtoError::from(
                             format!("received a stream error: {}", err)
-                        )));
+                        )))?;
 
                     debug!("got response: {:#?}", response_stream);
 
@@ -275,7 +274,7 @@ impl Future for HttpsSerialResponseInner {
                         response_stream,
                         response_bytes: Bytes::with_capacity(content_length.unwrap_or(512)),
                         content_length,
-                        name_server: *name_server,
+                        name_server: name_server,
                     }
                 }
                 Receiving {
@@ -284,10 +283,10 @@ impl Future for HttpsSerialResponseInner {
                     content_length,
                     name_server,
                 } => {
-                    while let Some(partial_bytes) = try_ready!(
+                    while let Some(partial_bytes) = ready!(
                         response_stream
                             .body_mut()
-                            .poll()
+                            .poll_next_unpin(cx)
                             .map_err(|e| ProtoError::from(format!("bad http request: {}", e)))
                     ) {
                         debug!("got bytes: {}", partial_bytes.len());
@@ -334,12 +333,12 @@ impl Future for HttpsSerialResponseInner {
                                             err
                                         ))
                                     })
-                                }).unwrap_or(Ok(::MIME_APPLICATION_DNS))?;
+                                }).unwrap_or(Ok(crate::MIME_APPLICATION_DNS))?;
 
-                            if content_type != ::MIME_APPLICATION_DNS {
+                            if content_type != crate::MIME_APPLICATION_DNS {
                                 return Err(HttpsError::from(format!(
                                     "ContentType unsupported (must be '{}'): '{}'",
-                                    ::MIME_APPLICATION_DNS,
+                                    crate::MIME_APPLICATION_DNS,
                                     content_type
                                 )));
                             }
@@ -364,7 +363,7 @@ impl Future for HttpsSerialResponseInner {
                     )));
                 }
                 Complete(ref mut message) => {
-                    return Ok(Async::Ready(
+                    return Ok(Poll::Ready(
                         message.take().expect("cannot poll after complete"),
                     ))
                 }
@@ -440,10 +439,9 @@ impl Default for HttpsClientStreamBuilder {
 pub struct HttpsClientConnect(HttpsClientConnectState);
 
 impl Future for HttpsClientConnect {
-    type Item = HttpsClientStream;
-    type Error = ProtoError;
+    type Output = Result<HttpsClientStream, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.0.poll()
     }
 }
@@ -460,7 +458,7 @@ enum HttpsClientConnectState {
         tls: Option<TlsConfig>,
     },
     TcpConnecting {
-        connect: ConnectFuture,
+        connect: Pin<Box<dyn Future<Output = io::Result<TokioTcpStream>>>>,
         name_server: SocketAddr,
         tls: Option<TlsConfig>,
     },
@@ -471,7 +469,7 @@ enum HttpsClientConnectState {
         name_server: SocketAddr,
     },
     H2Handshake {
-        handshake: Handshake<TokioTlsClientStream<TokioTcpStream>>,
+        handshake: Pin<Box<Future<Output = Result<(SendRequest<Bytes>, Connection<TokioTlsClientStream<TokioTcpStream>, Bytes>), h2::Error>>>>,
         name_server_name: Arc<String>,
         name_server: SocketAddr,
     },
@@ -480,15 +478,14 @@ enum HttpsClientConnectState {
 }
 
 impl Future for HttpsClientConnectState {
-    type Item = HttpsClientStream;
-    type Error = ProtoError;
+    type Output = Result<HttpsClientStream, ProtoError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             let next = match self {
                 HttpsClientConnectState::ConnectTcp { name_server, tls } => {
                     debug!("tcp connecting to: {}", name_server);
-                    let connect = TokioTcpStream::connect(&name_server);
+                    let connect = Box::pin(TokioTcpStream::connect(&name_server));
                     HttpsClientConnectState::TcpConnecting {
                         connect,
                         name_server: *name_server,
@@ -500,7 +497,7 @@ impl Future for HttpsClientConnectState {
                     name_server,
                     tls,
                 } => {
-                    let tcp = try_ready!(connect.poll());
+                    let tcp = ready!(connect.poll(cx));
                     debug!("tcp connection established to: {}", name_server);
                     let tls = tls
                         .take()
@@ -528,7 +525,7 @@ impl Future for HttpsClientConnectState {
                     name_server,
                     tls,
                 } => {
-                    let tls = try_ready!(tls.poll());
+                    let tls = ready!(tls.poll());
                     debug!("tls connection established to: {}", name_server);
                     let mut handshake = h2::client::Builder::new();
                     handshake.enable_push(false);
@@ -545,7 +542,7 @@ impl Future for HttpsClientConnectState {
                     name_server,
                     handshake,
                 } => {
-                    let (send_request, connection) = try_ready!(
+                    let (send_request, connection) = ready!(
                         handshake
                             .poll()
                             .map_err(|e| ProtoError::from(format!("h2 handshake error: {}", e)))
@@ -564,7 +561,7 @@ impl Future for HttpsClientConnectState {
                     }))
                 }
                 HttpsClientConnectState::Connected(conn) => {
-                    return Ok(Async::Ready(
+                    return Ok(Poll::Ready(
                         conn.take().expect("cannot poll after complete"),
                     ))
                 }
