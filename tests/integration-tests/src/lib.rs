@@ -92,7 +92,7 @@ impl TestResponseHandler {
                 Ok(Poll::Ready(bytes))
             } else {
                 task::current().notify();
-                Ok(Poll::NotReady)
+                Ok(Poll::Pending)
             }
         })
     }
@@ -172,7 +172,7 @@ impl Stream for TestClientStream {
             // TODO: should we also return None if there are no more messages to send?
             _ => {
                 task::current().notify();
-                Ok(Poll::NotReady)
+                Ok(Poll::Pending)
             }
         }
     }
@@ -230,14 +230,14 @@ impl Stream for NeverReturnsClientStream {
         println!("still not returning");
 
         // poll the timer forever...
-        if let Ok(Poll::NotReady) = self.timeout.poll() {
-            return Ok(Poll::NotReady);
+        if let Ok(Poll::Pending) = self.timeout.poll() {
+            return Ok(Poll::Pending);
         }
 
         self.timeout.reset(Instant::now() + Duration::from_secs(1));
 
         match self.timeout.poll() {
-            Ok(Poll::NotReady) => Ok(Poll::NotReady),
+            Ok(Poll::Pending) => Ok(Poll::Pending),
             _ => panic!("timeout fired early"),
         }
     }

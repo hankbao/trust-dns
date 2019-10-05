@@ -15,11 +15,10 @@ use std::task::Context;
 use std::io;
 
 use bytes::Bytes;
-use futures::{future, Future, FutureExt, Poll, Stream, StreamExt, TryFutureExt};
+use futures::{future, Future, FutureExt, Poll, Stream, TryFutureExt};
 use h2::client::{Connection, SendRequest};
-use h2::{self, RecvStream};
-use http::header;
-use http::{Response, StatusCode};
+use h2;
+use http::{self, header};
 use rustls::{Certificate, ClientConfig};
 use tokio_executor;
 use tokio_rustls::{client::TlsStream as TokioTlsClientStream, Connect, TlsConnector};
@@ -29,8 +28,6 @@ use webpki::DNSNameRef;
 
 use trust_dns_proto::error::ProtoError;
 use trust_dns_proto::xfer::{DnsRequest, DnsRequestSender, DnsResponse, SerialMessage};
-
-use crate::HttpsError;
 
 const ALPN_H2: &[u8] = b"h2";
 
@@ -61,7 +58,7 @@ impl HttpsClientStream {
         name_server_name: Arc<String>,
         name_server: SocketAddr) -> Result<DnsResponse, ProtoError> {
         
-        let h2 = match h2.ready().await {
+        let mut h2 = match h2.ready().await {
             Ok(h2) => h2,
             Err(err) => {
                 // TODO: make specific error
@@ -88,7 +85,7 @@ impl HttpsClientStream {
             .send_data(bytes, true)
             .map_err(|e| ProtoError::from(format!("h2 send_data error: {}", e)))?;
 
-        let response_stream = response_future.await.map_err(|err| ProtoError::from(
+        let mut response_stream = response_future.await.map_err(|err| ProtoError::from(
             format!("received a stream error: {}", err)
         ))?;
 
@@ -266,7 +263,7 @@ impl DnsRequestSender for HttpsClientStream {
 impl Stream for HttpsClientStream {
     type Item = Result<(), ProtoError>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         if self.is_shutdown {
             return Poll::Ready(None);
         }
@@ -344,7 +341,7 @@ pub struct HttpsClientConnect(HttpsClientConnectState);
 impl Future for HttpsClientConnect {
     type Output = Result<HttpsClientStream, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.0.poll_unpin(cx)
     }
 }
@@ -372,7 +369,7 @@ enum HttpsClientConnectState {
         name_server: SocketAddr,
     },
     H2Handshake {
-        handshake: Pin<Box<Future<Output = Result<(SendRequest<Bytes>, Connection<TokioTlsClientStream<TokioTcpStream>, Bytes>), h2::Error>>>>,
+        handshake: Pin<Box<dyn Future<Output = Result<(SendRequest<Bytes>, Connection<TokioTlsClientStream<TokioTcpStream>, Bytes>), h2::Error>>>>,
         name_server_name: Arc<String>,
         name_server: SocketAddr,
     },
@@ -383,12 +380,12 @@ enum HttpsClientConnectState {
 impl Future for HttpsClientConnectState {
     type Output = Result<HttpsClientStream, ProtoError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             let next = match *self {
-                HttpsClientConnectState::ConnectTcp { name_server, tls } => {
+                HttpsClientConnectState::ConnectTcp { name_server, ref mut tls } => {
                     debug!("tcp connecting to: {}", name_server);
-                    let connect = Box::pin(TokioTcpStream::connect(&name_server));
+                    let connect = Box::pin(TokioTcpStream::connect(name_server));
                     HttpsClientConnectState::TcpConnecting {
                         connect,
                         name_server: name_server,
@@ -396,9 +393,9 @@ impl Future for HttpsClientConnectState {
                     }
                 }
                 HttpsClientConnectState::TcpConnecting {
-                    connect,
+                    ref mut connect,
                     name_server,
-                    tls,
+                    ref mut tls,
                 } => {
                     let tcp = ready!(connect.poll_unpin(cx))?;
 
@@ -425,9 +422,9 @@ impl Future for HttpsClientConnectState {
                     }
                 }
                 HttpsClientConnectState::TlsConnecting {
-                    name_server_name,
+                    ref name_server_name,
                     name_server,
-                    tls,
+                    ref mut tls,
                 } => {
                     let tls = ready!(tls.poll_unpin(cx))?;
                     debug!("tls connection established to: {}", name_server);
@@ -442,9 +439,9 @@ impl Future for HttpsClientConnectState {
                     }
                 }
                 HttpsClientConnectState::H2Handshake {
-                    name_server_name,
+                    ref name_server_name,
                     name_server,
-                    handshake,
+                    ref mut handshake,
                 } => {
                     let (send_request, connection) = ready!(
                         handshake
@@ -455,7 +452,7 @@ impl Future for HttpsClientConnectState {
                     // TODO: hand this back for others to run rather than spawning here?
                     debug!("h2 connection established to: {}", name_server);
                     tokio_executor::spawn(
-                        connection.map_err(|e| warn!("h2 connection failed: {}", e)).map(|r: Result<(),()>| ()),
+                        connection.map_err(|e| warn!("h2 connection failed: {}", e)).map(|_: Result<(),()>| ()),
                     );
 
                     HttpsClientConnectState::Connected(Some(HttpsClientStream {
@@ -465,10 +462,10 @@ impl Future for HttpsClientConnectState {
                         is_shutdown: false,
                     }))
                 }
-                HttpsClientConnectState::Connected(conn) => {
+                HttpsClientConnectState::Connected(ref mut conn) => {
                     return Poll::Ready(Ok(conn.take().expect("cannot poll after complete")))
                 }
-                HttpsClientConnectState::Errored(err) => {
+                HttpsClientConnectState::Errored(ref mut err) => {
                     return Poll::Ready(Err(err.take().expect("cannot poll after complete")))
                 }
             };
