@@ -24,7 +24,6 @@ use futures::{future, Future};
 use futures::executor::block_on;
 use tokio::runtime::current_thread::Runtime;
 use tokio_net::tcp::TcpListener;
-use tokio_timer::Delay;
 use tokio_net::udp::UdpSocket;
 
 use trust_dns::client::*;
@@ -94,7 +93,7 @@ fn test_server_www_tcp() {
 
     assert!(client_result.is_ok(), "client failed: {:?}", client_result);
     server_continue.store(false, Ordering::Relaxed);
-    server_thread.join().unwrap();;
+    server_thread.join().unwrap();
 }
 
 #[test]
@@ -142,7 +141,7 @@ fn test_server_unknown_type() {
     );
 
     server_continue.store(false, Ordering::Relaxed);
-    server_thread.join().unwrap();;
+    server_thread.join().unwrap();
 }
 
 #[cfg(all(feature = "dns-over-openssl", not(feature = "dns-over-rustls")))]
