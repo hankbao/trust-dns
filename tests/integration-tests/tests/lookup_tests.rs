@@ -9,7 +9,7 @@ use std::net::*;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use futures::{Future, FutureExt, TryFutureExt};
+use futures::{FutureExt, TryFutureExt};
 use tokio::runtime::current_thread::Runtime;
 
 use trust_dns_proto::op::{NoopMessageFinalizer, Query};

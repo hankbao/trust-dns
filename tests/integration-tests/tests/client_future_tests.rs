@@ -23,7 +23,7 @@ use std::pin::Pin;
 
 #[cfg(feature = "dnssec")]
 use chrono::Duration;
-use futures::{Future, FutureExt, TryFutureExt};
+use futures::{Future, TryFutureExt};
 use tokio::runtime::current_thread::Runtime;
 use tokio_net::tcp::TcpStream as TokioTcpStream;
 use tokio_net::udp::UdpSocket as TokioUdpSocket;

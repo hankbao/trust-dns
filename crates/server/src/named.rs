@@ -47,7 +47,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use clap::{Arg, ArgMatches};
-use futures::{future, Future};
+use futures::{future, Future, TryFutureExt};
 use tokio::runtime::Runtime;
 use tokio::runtime::TaskExecutor;
 use tokio_net::tcp::TcpListener;
@@ -357,7 +357,7 @@ pub fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| directory_config.clone());
 
-    let mut io_loop = Runtime::new().expect("error when creating tokio Runtime");
+    let io_loop = Runtime::new().expect("error when creating tokio Runtime");
     let executor = io_loop.executor();
     let mut catalog: Catalog = Catalog::new();
     // configure our server based on the config_path

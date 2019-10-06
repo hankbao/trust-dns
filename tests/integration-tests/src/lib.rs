@@ -22,7 +22,7 @@ use std::task::{Context, Poll};
 use std::pin::Pin;
 
 use futures::executor::block_on;
-use futures::stream::{Fuse, Stream, StreamExt, TryStreamExt};
+use futures::stream::{Fuse, Stream, StreamExt};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use futures::{future, Future, FutureExt, TryFutureExt};
 use tokio_timer::Delay;

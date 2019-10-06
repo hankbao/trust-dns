@@ -6,7 +6,6 @@ extern crate trust_dns_server;
 use std::net::*;
 use std::str::FromStr;
 
-use futures::Future;
 use futures::executor::block_on;
 
 use trust_dns::op::*;
