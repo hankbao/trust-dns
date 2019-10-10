@@ -15,8 +15,8 @@ use std::time::Duration;
 use futures::stream::{Fuse, Peekable, Stream};
 use futures::sync::mpsc::{unbounded, UnboundedReceiver};
 use futures::{Async, Future, Poll};
-use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_tcp::TcpStream as TokioTcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream as TokioTcpStream;
 use tokio_timer::Timeout;
 
 use crate::error::*;

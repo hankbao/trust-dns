@@ -67,15 +67,15 @@ ring = { version = "0.14", optional = true }
 serde = { version = "1.0", optional = true }
 smallvec = "^0.6"
 socket2 = { version = "^0.3.9" }
-tokio-executor = "0.1.7"
-tokio-io = "^0.1"
-tokio-reactor = "^0.1"
-tokio-tcp = "^0.1"
-tokio-timer = "0.2.10"
-tokio-udp = "^0.1"
+tokio = { path = "../../../tokio/tokio" }
+tokio-executor = { path = "../../../tokio/tokio-executor" }
+tokio-io = { path = "../../../tokio/tokio-io" }
+tokio-reactor = { path = "../../../tokio/tokio-reactor" }
+tokio-tcp = { path = "../../../tokio/tokio-tcp" }
+tokio-timer = { path = "../../../tokio/tokio-timer" }
+tokio-udp = { path = "../../../tokio/tokio-udp" }
 untrusted = { version = "^0.6", optional = true }
 url = "1.6.0"
 
 [dev-dependencies]
 env_logger = "^0.6"
-tokio = "^0.1.15"

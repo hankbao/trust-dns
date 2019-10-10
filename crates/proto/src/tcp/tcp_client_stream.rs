@@ -10,8 +10,8 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use futures::{Async, Future, Poll, Stream};
-use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_tcp::TcpStream as TokioTcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream as TokioTcpStream;
 
 use crate::error::ProtoError;
 use crate::tcp::TcpStream;
