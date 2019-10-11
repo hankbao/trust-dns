@@ -71,8 +71,8 @@ resolv-conf = { version = "0.6.0", features = ["system"] }
 rustls = {version  = "0.15", optional = true}
 serde = { version = "1.0", features = ["derive"], optional = true }
 smallvec = "^0.6"
-tokio = { path = "../../../tokio/tokio", optional = true }
-tokio-executor = { path = "../../../tokio/tokio-executor" }
+tokio = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows", optional = true }
+tokio-executor = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }
 trust-dns-https = { version = "0.3.0", path = "../https", optional = true }
 trust-dns-native-tls = { version = "0.6.0", path = "../native-tls", optional = true }
 trust-dns-openssl = { version = "0.6.0", path = "../openssl", optional = true }
@@ -85,5 +85,5 @@ ipconfig = { version = "^0.2.0" }
 
 [dev-dependencies]
 env_logger = "^0.6"
-tokio-io = { path = "../../../tokio/tokio-io" }
-tokio = { path = "../../../tokio/tokio" }
+tokio-io = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }
+tokio = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }

@@ -69,13 +69,13 @@ ring = { version = "0.14", optional = true }
 serde = { version = "1.0", optional = true }
 smallvec = "^0.6"
 socket2 = { version = "^0.3.9" }
-tokio = { path = "../../../tokio/tokio" }
-tokio-executor = { path = "../../../tokio/tokio-executor" }
-tokio-io = { path = "../../../tokio/tokio-io" }
-tokio-reactor = { path = "../../../tokio/tokio-reactor" }
-tokio-tcp = { path = "../../../tokio/tokio-tcp" }
-tokio-timer = { path = "../../../tokio/tokio-timer" }
-tokio-udp = { path = "../../../tokio/tokio-udp" }
+tokio = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }
+tokio-executor = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }
+tokio-io = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }
+tokio-reactor = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }
+tokio-tcp = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }
+tokio-timer = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }
+tokio-udp = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }
 untrusted = { version = "^0.6", optional = true }
 url = "1.6.0"
 
