@@ -556,6 +556,9 @@ pub struct ResolverOpts {
     ///
     /// 0 or 1 will configure this to execute all requests serially
     pub num_concurrent_reqs: usize,
+    /// Bind to specific netif
+    #[cfg(feature = "bindif")]
+    pub bind_if: u32,
 }
 
 impl Default for ResolverOpts {
@@ -580,6 +583,8 @@ impl Default for ResolverOpts {
             negative_max_ttl: None,
             distrust_nx_responses: true,
             num_concurrent_reqs: 2,
+            #[cfg(feature = "bindif")]
+            bind_if: 0,
         }
     }
 }

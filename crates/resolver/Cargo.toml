@@ -54,6 +54,8 @@ serde-config = ["serde", "trust-dns-proto/serde-config"]
 
 mdns = ["trust-dns-proto/mdns"]
 
+bindif = ["trust-dns-proto/bindif"]
+
 [lib]
 name = "trust_dns_resolver"
 path = "src/lib.rs"
