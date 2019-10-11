@@ -34,9 +34,15 @@ impl TcpClientStream<TokioTcpStream> {
     /// # Arguments
     ///
     /// * `name_server` - the IP and Port of the DNS server to connect to
+    #[cfg(not(feature = "bindif"))]
     #[allow(clippy::new_ret_no_self)]
     pub fn new(name_server: SocketAddr) -> (TcpClientConnect, Box<DnsStreamHandle + Send>) {
         Self::with_timeout(name_server, Duration::from_secs(5))
+    }
+
+    #[cfg(feature = "bindif")]
+    pub fn new(name_server: SocketAddr, bind_if: u32) -> (TcpClientConnect, Box<DnsStreamHandle + Send>) {
+        Self::with_timeout(name_server, Duration::from_secs(5), bind_if)
     }
 
     /// Constructs a new TcpStream for a client to the specified SocketAddr.
@@ -45,11 +51,31 @@ impl TcpClientStream<TokioTcpStream> {
     ///
     /// * `name_server` - the IP and Port of the DNS server to connect to
     /// * `timeout` - connection timeout
+    #[cfg(not(feature = "bindif"))]
     pub fn with_timeout(
         name_server: SocketAddr,
         timeout: Duration,
     ) -> (TcpClientConnect, Box<DnsStreamHandle + Send>) {
         let (stream_future, sender) = TcpStream::with_timeout(name_server, timeout);
+
+        let new_future = Box::new(
+            stream_future
+                .map(move |tcp_stream| TcpClientStream { tcp_stream })
+                .map_err(ProtoError::from),
+        );
+
+        let sender = Box::new(BufDnsStreamHandle::new(name_server, sender));
+
+        (TcpClientConnect(new_future), sender)
+    }
+
+    #[cfg(feature = "bindif")]
+    pub fn with_timeout(
+        name_server: SocketAddr,
+        timeout: Duration,
+        bind_if: u32,
+    ) -> (TcpClientConnect, Box<DnsStreamHandle + Send>) {
+        let (stream_future, sender) = TcpStream::with_timeout(name_server, timeout, bind_if);
 
         let new_future = Box::new(
             stream_future

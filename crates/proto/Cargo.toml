@@ -48,6 +48,8 @@ mdns = ["socket2/reuseport"]
 # WARNING: there is a bug in the mutual tls auth code at the moment see issue #100
 # mtls = ["tls"]
 
+bindif = ["winapi"]
+
 [lib]
 name = "trust_dns_proto"
 path = "src/lib.rs"
@@ -76,6 +78,15 @@ tokio-timer = { path = "../../../tokio/tokio-timer" }
 tokio-udp = { path = "../../../tokio/tokio-udp" }
 untrusted = { version = "^0.6", optional = true }
 url = "1.6.0"
+
+[target.'cfg(windows)'.dependencies.winapi]
+git = "https://github.com/hankbao/winapi-rs.git"
+branch = "iphlpapi-support"
+optional = true
+features = [
+    "winsock2",
+    "ws2ipdef",
+]
 
 [dev-dependencies]
 env_logger = "^0.6"

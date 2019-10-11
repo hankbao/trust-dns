@@ -19,6 +19,13 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_timer::Timeout;
 
+#[cfg(feature = "bindif")]
+use std::os::windows::io::{AsRawSocket, RawSocket};
+#[cfg(feature = "bindif")]
+use socket2::{Domain, Protocol, Socket, Type};
+#[cfg(feature = "bindif")]
+use tokio_reactor::Handle;
+
 use crate::error::*;
 use crate::xfer::{BufStreamHandle, SerialMessage};
 
@@ -87,6 +94,7 @@ impl TcpStream<TokioTcpStream> {
     /// # Arguments
     ///
     /// * `name_server` - the IP and Port of the DNS server to connect to
+    #[cfg(not(feature = "bindif"))]
     pub fn new<E>(
         name_server: SocketAddr,
     ) -> (
@@ -99,12 +107,27 @@ impl TcpStream<TokioTcpStream> {
         Self::with_timeout(name_server, Duration::from_secs(5))
     }
 
+    #[cfg(feature = "bindif")]
+    pub fn new<E>(
+        name_server: SocketAddr,
+        bind_if: u32,
+    ) -> (
+        Box<Future<Item = TcpStream<TokioTcpStream>, Error = io::Error> + Send>,
+        BufStreamHandle,
+    )
+    where
+        E: FromProtoError,
+    {
+        Self::with_timeout(name_server, Duration::from_secs(5), bind_if)
+    }
+
     /// Creates a new future of the eventually establish a IO stream connection or fail trying
     ///
     /// # Arguments
     ///
     /// * `name_server` - the IP and Port of the DNS server to connect to
     /// * `timeout` - connection timeout
+    #[cfg(not(feature = "bindif"))]
     pub fn with_timeout(
         name_server: SocketAddr,
         timeout: Duration,
@@ -142,6 +165,141 @@ impl TcpStream<TokioTcpStream> {
             });
 
         (Box::new(stream), message_sender)
+    }
+
+    #[cfg(feature = "bindif")]
+    #[allow(deprecated)]
+    pub fn with_timeout(
+        name_server: SocketAddr,
+        timeout: Duration,
+        bind_if: u32,
+    ) -> (
+        Box<Future<Item = TcpStream<TokioTcpStream>, Error = io::Error> + Send>,
+        BufStreamHandle,
+    ) {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+        let (message_sender, outbound_messages) = unbounded();
+        let message_sender = BufStreamHandle::new(message_sender);
+
+        let socket = match name_server {
+            SocketAddr::V4(_) => {
+                let s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))
+                    .expect("Failed to create ipv4 TCP socket");
+                // Windows requires a socket be bound before calling connect
+                if cfg!(windows) {
+                    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+                    if let Err(e) = s.bind(&addr.into()) {
+                        debug!("socket bind() failed: {}", e);
+                    }
+                }
+                if let Err(e) = TcpStream::bind_to_if4(s.as_raw_socket(), bind_if) {
+                    debug!("bind socket {} to if {} failed: {}", s.as_raw_socket(), bind_if, e);
+                }
+                s
+            }
+            SocketAddr::V6(_) => {
+                let s = Socket::new(Domain::ipv6(), Type::stream(), Some(Protocol::tcp()))
+                    .expect("Failed to create ipv6 TCP socket");
+                // Windows requires a socket be bound before calling connect
+                if cfg!(windows) {
+                    let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0);
+                    if let Err(e) = s.bind(&addr.into()) {
+                        debug!("socket bind() failed: {}", e);
+                    }
+                }
+                if let Err(e) = TcpStream::bind_to_if6(s.as_raw_socket(), bind_if) {
+                    debug!("bind socket {} to if {} failed: {}", s.as_raw_socket(), bind_if, e);
+                }
+                s
+            }
+        };
+
+        // This set of futures collapses the next tcp socket into a stream which can be used for
+        //  sending and receiving tcp packets.
+        let handle = Handle::current();
+        let tcp = TokioTcpStream::connect_std(socket.into_tcp_stream(), &name_server, &handle);
+        let stream = Timeout::new(tcp, timeout)
+            .map_err(move |e| {
+                debug!("timed out connecting to: {}", name_server);
+                e.into_inner().unwrap_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("timed out connecting to: {}", name_server),
+                    )
+                })
+            }).map(move |tcp_stream| {
+                debug!("TCP connection established to: {}", name_server);
+                TcpStream {
+                    socket: tcp_stream,
+                    outbound_messages: outbound_messages.fuse().peekable(),
+                    send_state: None,
+                    read_state: ReadTcpState::LenBytes {
+                        pos: 0,
+                        bytes: [0u8; 2],
+                    },
+                    peer_addr: name_server,
+                }
+            });
+
+        (Box::new(stream), message_sender)
+    }
+
+    #[cfg(feature = "bindif")]
+    fn bind_to_if4(socket: RawSocket, bind_if: u32) -> io::Result<()> {
+        use std::mem;
+        use winapi::shared::ws2def::IPPROTO_IP;
+        use winapi::shared::ws2ipdef::IPV6_UNICAST_IF;
+        use winapi::um::winsock2::{setsockopt, WSAGetLastError};
+
+        // FIXME: winapi doesn't define IP_UNICAST_IF yet
+        const IP_UNICAST_IF: i32 = IPV6_UNICAST_IF;
+
+        // MSDN says for IPv4 this needs to be in net byte order,
+        // so that it's like an IP address with leading zeros.
+        let if_index = bind_if.to_be();
+
+        let ret = unsafe {
+            setsockopt(
+                socket as usize,
+                IPPROTO_IP,
+                IP_UNICAST_IF,
+                &if_index as *const _ as *const i8,
+                mem::size_of_val(&if_index) as i32,
+            )
+        };
+
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }))
+        }
+    }
+
+    #[cfg(feature = "bindif")]
+    fn bind_to_if6(socket: RawSocket, bind_if: u32) -> io::Result<()> {
+        use std::mem;
+        use winapi::shared::ws2def::IPPROTO_IPV6;
+        use winapi::shared::ws2ipdef::IPV6_UNICAST_IF;
+        use winapi::um::winsock2::{setsockopt, WSAGetLastError};
+
+        let if_index = bind_if;
+
+        let ret = unsafe {
+            setsockopt(
+                socket as usize,
+                IPPROTO_IPV6 as i32,
+                IPV6_UNICAST_IF,
+                &if_index as *const _ as *const i8,
+                mem::size_of_val(&if_index) as i32,
+            )
+        };
+
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }))
+        }
     }
 }
 

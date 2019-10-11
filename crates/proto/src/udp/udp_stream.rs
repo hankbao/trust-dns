@@ -8,6 +8,9 @@
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
+#[cfg(feature = "bindif")]
+use std::os::windows::io::{AsRawSocket, RawSocket};
+
 use futures::stream::{Fuse, Peekable, Stream};
 use futures::sync::mpsc::{unbounded, UnboundedReceiver};
 use futures::task;
@@ -39,6 +42,7 @@ impl UdpStream {
     ///
     /// a tuple of a Future Stream which will handle sending and receiving messsages, and a
     ///  handle which can be used to send messages into the stream.
+    #[cfg(not(feature = "bindif"))]
     pub fn new(
         name_server: SocketAddr,
     ) -> (
@@ -51,6 +55,31 @@ impl UdpStream {
         // TODO: allow the bind address to be specified...
         // constructs a future for getting the next randomly bound port to a UdpSocket
         let next_socket = NextRandomUdpSocket::new(&name_server);
+
+        // This set of futures collapses the next udp socket into a stream which can be used for
+        //  sending and receiving udp packets.
+        let stream = Box::new(next_socket.map(move |socket| UdpStream {
+            socket,
+            outbound_messages: outbound_messages.fuse().peekable(),
+        }));
+
+        (stream, message_sender)
+    }
+
+    #[cfg(feature = "bindif")]
+    pub fn new(
+        name_server: SocketAddr,
+        bind_if: u32,
+    ) -> (
+        Box<Future<Item = UdpStream, Error = io::Error> + Send>,
+        BufStreamHandle,
+    ) {
+        let (message_sender, outbound_messages) = unbounded();
+        let message_sender = BufStreamHandle::new(message_sender);
+
+        // TODO: allow the bind address to be specified...
+        // constructs a future for getting the next randomly bound port to a UdpSocket
+        let next_socket = NextRandomUdpSocket::new(&name_server, bind_if);
 
         // This set of futures collapses the next udp socket into a stream which can be used for
         //  sending and receiving udp packets.
@@ -145,10 +174,13 @@ impl Stream for UdpStream {
 #[must_use = "futures do nothing unless polled"]
 pub(crate) struct NextRandomUdpSocket {
     bind_address: IpAddr,
+    #[cfg(feature = "bindif")]
+    bind_if: u32,
 }
 
 impl NextRandomUdpSocket {
     /// Creates a future for randomly binding to a local socket address for client connections.
+    #[cfg(not(feature = "bindif"))]
     pub(crate) fn new(name_server: &SocketAddr) -> NextRandomUdpSocket {
         let zero_addr: IpAddr = match *name_server {
             SocketAddr::V4(..) => IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
@@ -157,6 +189,84 @@ impl NextRandomUdpSocket {
 
         NextRandomUdpSocket {
             bind_address: zero_addr,
+        }
+    }
+
+    #[cfg(feature = "bindif")]
+    pub(crate) fn new(name_server: &SocketAddr, bind_if: u32) -> NextRandomUdpSocket {
+        let zero_addr: IpAddr = match *name_server {
+            SocketAddr::V4(..) => IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+            SocketAddr::V6(..) => IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)),
+        };
+
+        NextRandomUdpSocket {
+            bind_address: zero_addr,
+            bind_if,
+        }
+    }
+
+    #[cfg(feature = "bindif")]
+    fn bind_to_if(&self, socket: RawSocket) -> io::Result<()> {
+        match self.bind_address {
+            IpAddr::V4(_) => self.bind_to_if4(socket),
+            IpAddr::V6(_) => self.bind_to_if6(socket),
+        }
+    }
+
+    #[cfg(feature = "bindif")]
+    fn bind_to_if4(&self, socket: RawSocket) -> io::Result<()> {
+        use std::mem;
+        use winapi::shared::ws2def::IPPROTO_IP;
+        use winapi::shared::ws2ipdef::IPV6_UNICAST_IF;
+        use winapi::um::winsock2::{setsockopt, WSAGetLastError};
+
+        // FIXME: winapi doesn't define IP_UNICAST_IF yet
+        const IP_UNICAST_IF: i32 = IPV6_UNICAST_IF;
+
+        // MSDN says for IPv4 this needs to be in net byte order,
+        // so that it's like an IP address with leading zeros.
+        let if_index = self.bind_if.to_be();
+
+        let ret = unsafe {
+            setsockopt(
+                socket as usize,
+                IPPROTO_IP,
+                IP_UNICAST_IF,
+                &if_index as *const _ as *const i8,
+                mem::size_of_val(&if_index) as i32,
+            )
+        };
+
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }))
+        }
+    }
+
+    #[cfg(feature = "bindif")]
+    fn bind_to_if6(&self, socket: RawSocket) -> io::Result<()> {
+        use std::mem;
+        use winapi::shared::ws2def::IPPROTO_IPV6;
+        use winapi::shared::ws2ipdef::IPV6_UNICAST_IF;
+        use winapi::um::winsock2::{setsockopt, WSAGetLastError};
+
+        let if_index = self.bind_if;
+
+        let ret = unsafe {
+            setsockopt(
+                socket as usize,
+                IPPROTO_IPV6 as i32,
+                IPV6_UNICAST_IF,
+                &if_index as *const _ as *const i8,
+                mem::size_of_val(&if_index) as i32,
+            )
+        };
+
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }))
         }
     }
 }
@@ -180,6 +290,13 @@ impl Future for NextRandomUdpSocket {
             match tokio_udp::UdpSocket::bind(&zero_addr) {
                 Ok(socket) => {
                     debug!("created socket: {:?}", socket);
+                    #[cfg(feature = "bindif")]
+                    {
+                        let s = socket.as_raw_socket();
+                        if let Err(e) = self.bind_to_if(s) {
+                            debug!("unable to bind socket {} to if {}", s, self.bind_if);
+                        }
+                    }
                     return Ok(Async::Ready(socket));
                 }
                 Err(err) => debug!("unable to bind port, attempt: {}: {}", attempt, err),
