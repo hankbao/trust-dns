@@ -20,11 +20,13 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio_timer::Timeout;
 
 #[cfg(feature = "bindif")]
-use std::os::windows::io::{AsRawSocket, RawSocket};
+use std::os::windows::io::AsRawSocket;
 #[cfg(feature = "bindif")]
 use socket2::{Domain, Protocol, Socket, Type};
 #[cfg(feature = "bindif")]
 use tokio_reactor::Handle;
+#[cfg(feature = "bindif")]
+use crate::bind_if;
 
 use crate::error::*;
 use crate::xfer::{BufStreamHandle, SerialMessage};
@@ -193,7 +195,7 @@ impl TcpStream<TokioTcpStream> {
                         debug!("socket bind() failed: {}", e);
                     }
                 }
-                if let Err(e) = TcpStream::bind_to_if4(s.as_raw_socket(), bind_if) {
+                if let Err(e) = bind_if::bind_to_if4(s.as_raw_socket(), bind_if) {
                     debug!("bind socket {} to if {} failed: {}", s.as_raw_socket(), bind_if, e);
                 }
                 s
@@ -208,7 +210,7 @@ impl TcpStream<TokioTcpStream> {
                         debug!("socket bind() failed: {}", e);
                     }
                 }
-                if let Err(e) = TcpStream::bind_to_if6(s.as_raw_socket(), bind_if) {
+                if let Err(e) = bind_if::bind_to_if6(s.as_raw_socket(), bind_if) {
                     debug!("bind socket {} to if {} failed: {}", s.as_raw_socket(), bind_if, e);
                 }
                 s
@@ -243,63 +245,6 @@ impl TcpStream<TokioTcpStream> {
             });
 
         (Box::new(stream), message_sender)
-    }
-
-    #[cfg(feature = "bindif")]
-    fn bind_to_if4(socket: RawSocket, bind_if: u32) -> io::Result<()> {
-        use std::mem;
-        use winapi::shared::ws2def::IPPROTO_IP;
-        use winapi::shared::ws2ipdef::IPV6_UNICAST_IF;
-        use winapi::um::winsock2::{setsockopt, WSAGetLastError};
-
-        // FIXME: winapi doesn't define IP_UNICAST_IF yet
-        const IP_UNICAST_IF: i32 = IPV6_UNICAST_IF;
-
-        // MSDN says for IPv4 this needs to be in net byte order,
-        // so that it's like an IP address with leading zeros.
-        let if_index = bind_if.to_be();
-
-        let ret = unsafe {
-            setsockopt(
-                socket as usize,
-                IPPROTO_IP,
-                IP_UNICAST_IF,
-                &if_index as *const _ as *const i8,
-                mem::size_of_val(&if_index) as i32,
-            )
-        };
-
-        if ret == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }))
-        }
-    }
-
-    #[cfg(feature = "bindif")]
-    fn bind_to_if6(socket: RawSocket, bind_if: u32) -> io::Result<()> {
-        use std::mem;
-        use winapi::shared::ws2def::IPPROTO_IPV6;
-        use winapi::shared::ws2ipdef::IPV6_UNICAST_IF;
-        use winapi::um::winsock2::{setsockopt, WSAGetLastError};
-
-        let if_index = bind_if;
-
-        let ret = unsafe {
-            setsockopt(
-                socket as usize,
-                IPPROTO_IPV6 as i32,
-                IPV6_UNICAST_IF,
-                &if_index as *const _ as *const i8,
-                mem::size_of_val(&if_index) as i32,
-            )
-        };
-
-        if ret == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }))
-        }
     }
 }
 

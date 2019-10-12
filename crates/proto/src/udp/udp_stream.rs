@@ -8,9 +8,6 @@
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-#[cfg(feature = "bindif")]
-use std::os::windows::io::{AsRawSocket, RawSocket};
-
 use futures::stream::{Fuse, Peekable, Stream};
 use futures::sync::mpsc::{unbounded, UnboundedReceiver};
 use futures::task;
@@ -18,6 +15,15 @@ use futures::{Async, Future, Poll};
 use rand;
 use rand::distributions::{uniform::Uniform, Distribution};
 use tokio_udp;
+
+#[cfg(feature = "bindif")]
+use std::os::windows::io::AsRawSocket;
+#[cfg(feature = "bindif")]
+use socket2::{Domain, Protocol, Socket, Type};
+#[cfg(feature = "bindif")]
+use tokio_reactor::Handle;
+#[cfg(feature = "bindif")]
+use crate::bind_if;
 
 use crate::xfer::{BufStreamHandle, SerialMessage};
 
@@ -204,71 +210,6 @@ impl NextRandomUdpSocket {
             bind_if,
         }
     }
-
-    #[cfg(feature = "bindif")]
-    fn bind_to_if(&self, socket: RawSocket) -> io::Result<()> {
-        match self.bind_address {
-            IpAddr::V4(_) => self.bind_to_if4(socket),
-            IpAddr::V6(_) => self.bind_to_if6(socket),
-        }
-    }
-
-    #[cfg(feature = "bindif")]
-    fn bind_to_if4(&self, socket: RawSocket) -> io::Result<()> {
-        use std::mem;
-        use winapi::shared::ws2def::IPPROTO_IP;
-        use winapi::shared::ws2ipdef::IPV6_UNICAST_IF;
-        use winapi::um::winsock2::{setsockopt, WSAGetLastError};
-
-        // FIXME: winapi doesn't define IP_UNICAST_IF yet
-        const IP_UNICAST_IF: i32 = IPV6_UNICAST_IF;
-
-        // MSDN says for IPv4 this needs to be in net byte order,
-        // so that it's like an IP address with leading zeros.
-        let if_index = self.bind_if.to_be();
-
-        let ret = unsafe {
-            setsockopt(
-                socket as usize,
-                IPPROTO_IP,
-                IP_UNICAST_IF,
-                &if_index as *const _ as *const i8,
-                mem::size_of_val(&if_index) as i32,
-            )
-        };
-
-        if ret == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }))
-        }
-    }
-
-    #[cfg(feature = "bindif")]
-    fn bind_to_if6(&self, socket: RawSocket) -> io::Result<()> {
-        use std::mem;
-        use winapi::shared::ws2def::IPPROTO_IPV6;
-        use winapi::shared::ws2ipdef::IPV6_UNICAST_IF;
-        use winapi::um::winsock2::{setsockopt, WSAGetLastError};
-
-        let if_index = self.bind_if;
-
-        let ret = unsafe {
-            setsockopt(
-                socket as usize,
-                IPPROTO_IPV6 as i32,
-                IPV6_UNICAST_IF,
-                &if_index as *const _ as *const i8,
-                mem::size_of_val(&if_index) as i32,
-            )
-        };
-
-        if ret == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }))
-        }
-    }
 }
 
 impl Future for NextRandomUdpSocket {
@@ -278,6 +219,7 @@ impl Future for NextRandomUdpSocket {
     /// polls until there is an available next random UDP port.
     ///
     /// if there is no port available after 10 attempts, returns NotReady
+    #[cfg(not(feature = "bindif"))]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let rand_port_range = Uniform::new_inclusive(1025_u16, u16::max_value());
         let mut rand = rand::thread_rng();
@@ -290,13 +232,59 @@ impl Future for NextRandomUdpSocket {
             match tokio_udp::UdpSocket::bind(&zero_addr) {
                 Ok(socket) => {
                     debug!("created socket: {:?}", socket);
-                    #[cfg(feature = "bindif")]
-                    {
-                        let s = socket.as_raw_socket();
-                        if let Err(e) = self.bind_to_if(s) {
-                            debug!("unable to bind socket {} to if {}", s, self.bind_if);
-                        }
+                    return Ok(Async::Ready(socket));
+                }
+                Err(err) => debug!("unable to bind port, attempt: {}: {}", attempt, err),
+            }
+        }
+
+        debug!("could not get next random port, delaying");
+
+        task::current().notify();
+        // returning NotReady here, perhaps the next poll there will be some more socket available.
+        Ok(Async::NotReady)
+    }
+
+    #[cfg(feature = "bindif")]
+    #[allow(deprecated)]
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let rand_port_range = Uniform::new_inclusive(1025_u16, u16::max_value());
+        let mut rand = rand::thread_rng();
+
+        for attempt in 0..10 {
+            let port = rand_port_range.sample(&mut rand); // the range is [0 ... u16::max]
+            let zero_addr = SocketAddr::new(self.bind_address, port);
+
+            let socket = match zero_addr {
+                SocketAddr::V4(_) => {
+                    let s = Socket::new(Domain::ipv4(), Type::dgram(), Some(Protocol::udp()))
+                        .expect("Failed to create ipv4 UDP socket");
+                    if let Err(e) = s.bind(&zero_addr.into()) {
+                        debug!("socket bind() failed: {}", e);
                     }
+                    if let Err(e) = bind_if::bind_to_if4(s.as_raw_socket(), self.bind_if) {
+                        debug!("bind socket {} to if {} failed: {}", s.as_raw_socket(), self.bind_if ,e);
+                    }
+                    s
+                }
+                SocketAddr::V6(_) => {
+                    let s = Socket::new(Domain::ipv6(), Type::dgram(), Some(Protocol::udp()))
+                        .expect("Failed to create ipv6 UDP socket");
+                    if let Err(e) = s.bind(&zero_addr.into()) {
+                        debug!("socket bind() failed: {}", e);
+                    }
+                    if let Err(e) = bind_if::bind_to_if6(s.as_raw_socket(), self.bind_if) {
+                        debug!("bind socket {} to if {} failed: {}", s.as_raw_socket(), self.bind_if, e);
+                    }
+                    s
+                }
+            };
+
+            // TODO: allow TTL to be adjusted...
+            let handle = Handle::current();
+            match tokio_udp::UdpSocket::from_std(socket.into_udp_socket(), &handle) {
+                Ok(socket) => {
+                    debug!("created socket: {:?}", socket);
                     return Ok(Async::Ready(socket));
                 }
                 Err(err) => debug!("unable to bind port, attempt: {}: {}", attempt, err),

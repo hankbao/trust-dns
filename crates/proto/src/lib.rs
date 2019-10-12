@@ -48,6 +48,9 @@ extern crate tokio_udp;
 extern crate untrusted;
 extern crate url;
 
+#[cfg(feature = "bindif")]
+mod bind_if;
+
 pub mod error;
 #[cfg(feature = "mdns")]
 pub mod multicast;
