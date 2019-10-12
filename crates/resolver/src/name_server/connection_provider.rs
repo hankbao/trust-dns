@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::{Future, Poll};
-use tokio_executor::{DefaultExecutor, Executor};
+use tokio::executor::{DefaultExecutor, Executor};
 
 use proto;
 #[cfg(feature = "mdns")]

@@ -23,7 +23,7 @@ use openssl::error::ErrorStack as SslErrorStack;
 use ring::error::Unspecified;
 
 use failure::{Backtrace, Context, Fail};
-use tokio_executor::SpawnError;
+use tokio::executor::SpawnError;
 use tokio_timer::Error as TimerError;
 
 /// An alias for results returned by functions of this crate
