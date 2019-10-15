@@ -17,8 +17,8 @@ use futures::{Async, Future, Poll};
 use rand;
 use rand::distributions::{uniform::Uniform, Distribution};
 use socket2::{self, Socket};
-use tokio_reactor::Handle;
-use tokio_udp::UdpSocket;
+use tokio::reactor::Handle;
+use tokio::net::UdpSocket;
 
 use crate::multicast::MdnsQueryType;
 use crate::udp::UdpStream;
@@ -447,7 +447,7 @@ pub mod tests {
     //   as there are probably unexpected responses coming on the standard addresses
     fn one_shot_mdns_test(mdns_addr: SocketAddr) {
         use std::time::{Duration, Instant};
-        use tokio_timer::Delay;
+        use tokio::timer::Delay;
 
         let client_done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
@@ -460,7 +460,7 @@ pub mod tests {
             .name("test_one_shot_mdns:server".to_string())
             .spawn(move || {
                 let mut server_loop = Runtime::new().unwrap();
-                let mut timeout: Box<Future<Item = (), Error = tokio_timer::Error> + Send> =
+                let mut timeout: Box<Future<Item = (), Error = tokio::timer::Error> + Send> =
                     Box::new(future::lazy(|| {
                         Delay::new(Instant::now() + Duration::from_millis(100))
                     }));
@@ -530,7 +530,7 @@ pub mod tests {
         let (stream, sender) =
             MdnsStream::new(mdns_addr, MdnsQueryType::OneShot, Some(1), None, Some(5));
         let mut stream = io_loop.block_on(stream).ok().unwrap().into_future();
-        let mut timeout: Box<Future<Item = (), Error = tokio_timer::Error> + Send> =
+        let mut timeout: Box<Future<Item = (), Error = tokio::timer::Error> + Send> =
             Box::new(future::lazy(|| {
                 Delay::new(Instant::now() + Duration::from_millis(100))
             }));
@@ -602,7 +602,7 @@ pub mod tests {
     //   as there are probably unexpected responses coming on the standard addresses
     fn passive_mdns_test(mdns_query_type: MdnsQueryType, mdns_addr: SocketAddr) {
         use std::time::{Duration, Instant};
-        use tokio_timer::Delay;
+        use tokio::timer::Delay;
 
         let server_got_packet = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
@@ -615,7 +615,7 @@ pub mod tests {
             .name("test_one_shot_mdns:server".to_string())
             .spawn(move || {
                 let mut io_loop = Runtime::new().unwrap();
-                let mut timeout: Box<Future<Item = (), Error = tokio_timer::Error> + Send> =
+                let mut timeout: Box<Future<Item = (), Error = tokio::timer::Error> + Send> =
                     Box::new(future::lazy(|| {
                         Delay::new(Instant::now() + Duration::from_millis(100))
                     }));
@@ -674,7 +674,7 @@ pub mod tests {
         let (stream, sender) =
             MdnsStream::new(mdns_addr, MdnsQueryType::OneShot, Some(1), None, Some(5));
         let mut stream = io_loop.block_on(stream).ok().unwrap().into_future();
-        let mut timeout: Box<Future<Item = (), Error = tokio_timer::Error> + Send> =
+        let mut timeout: Box<Future<Item = (), Error = tokio::timer::Error> + Send> =
             Box::new(future::lazy(|| {
                 Delay::new(Instant::now() + Duration::from_millis(100))
             }));

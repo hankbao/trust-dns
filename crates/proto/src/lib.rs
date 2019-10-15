@@ -37,13 +37,6 @@ extern crate smallvec;
 extern crate socket2;
 #[cfg(test)]
 extern crate tokio;
-extern crate tokio_executor;
-#[macro_use]
-extern crate tokio_io;
-extern crate tokio_reactor;
-extern crate tokio_tcp;
-extern crate tokio_timer;
-extern crate tokio_udp;
 #[cfg(feature = "ring")]
 extern crate untrusted;
 extern crate url;

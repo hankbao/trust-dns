@@ -24,7 +24,7 @@ use ring::error::Unspecified;
 
 use failure::{Backtrace, Context, Fail};
 use tokio::executor::SpawnError;
-use tokio_timer::Error as TimerError;
+use tokio::timer::Error as TimerError;
 
 /// An alias for results returned by functions of this crate
 pub type ProtoResult<T> = ::std::result::Result<T, ProtoError>;
@@ -294,8 +294,8 @@ impl From<TimerError> for ProtoError {
     }
 }
 
-impl From<tokio_timer::timeout::Error<ProtoError>> for ProtoError {
-    fn from(e: tokio_timer::timeout::Error<ProtoError>) -> Self {
+impl From<tokio::timer::timeout::Error<ProtoError>> for ProtoError {
+    fn from(e: tokio::timer::timeout::Error<ProtoError>) -> Self {
         if e.is_elapsed() {
             return ProtoError::from(ProtoErrorKind::Timeout);
         }
@@ -307,11 +307,11 @@ impl From<tokio_timer::timeout::Error<ProtoError>> for ProtoError {
         if e.is_timer() {
             return ProtoError::from(
                 e.into_timer()
-                    .expect("invalid state, not a tokio_timer::Error"),
+                    .expect("invalid state, not a tokio::timer::Error"),
             );
         }
 
-        ProtoError::from("unknown error with tokio_timer")
+        ProtoError::from("unknown error with tokio::timer")
     }
 }
 

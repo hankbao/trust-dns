@@ -32,7 +32,7 @@ where
     S: DnsRequestSender<DnsResponseFuture = R>,
     R: Future<Item = DnsResponse, Error = ProtoError> + 'static + Send,
 {
-    /// Initializes a TcpStream with an existing tokio_tcp::TcpStream.
+    /// Initializes a TcpStream with an existing tokio::net::TcpStream.
     ///
     /// This is intended for use with a TcpListener and Incoming.
     ///

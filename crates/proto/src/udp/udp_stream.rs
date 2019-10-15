@@ -14,23 +14,23 @@ use futures::task;
 use futures::{Async, Future, Poll};
 use rand;
 use rand::distributions::{uniform::Uniform, Distribution};
-use tokio_udp;
+use tokio::net::UdpSocket as TokioUdpSocket;
 
 #[cfg(feature = "bindif")]
-use std::os::windows::io::AsRawSocket;
+use crate::bind_if;
 #[cfg(feature = "bindif")]
 use socket2::{Domain, Protocol, Socket, Type};
 #[cfg(feature = "bindif")]
-use tokio_reactor::Handle;
+use std::os::windows::io::AsRawSocket;
 #[cfg(feature = "bindif")]
-use crate::bind_if;
+use tokio::reactor::Handle;
 
 use crate::xfer::{BufStreamHandle, SerialMessage};
 
 /// A UDP stream of DNS binary packets
 #[must_use = "futures do nothing unless polled"]
 pub struct UdpStream {
-    socket: tokio_udp::UdpSocket,
+    socket: TokioUdpSocket,
     outbound_messages: Peekable<Fuse<UnboundedReceiver<SerialMessage>>>,
 }
 
@@ -110,7 +110,7 @@ impl UdpStream {
     ///
     /// a tuple of a Future Stream which will handle sending and receiving messsages, and a
     ///  handle which can be used to send messages into the stream.
-    pub fn with_bound(socket: tokio_udp::UdpSocket) -> (Self, BufStreamHandle) {
+    pub fn with_bound(socket: TokioUdpSocket) -> (Self, BufStreamHandle) {
         let (message_sender, outbound_messages) = unbounded();
         let message_sender = BufStreamHandle::new(message_sender);
 
@@ -124,7 +124,7 @@ impl UdpStream {
 
     #[allow(unused)]
     pub(crate) fn from_parts(
-        socket: tokio_udp::UdpSocket,
+        socket: TokioUdpSocket,
         outbound_messages: UnboundedReceiver<SerialMessage>,
     ) -> Self {
         UdpStream {
@@ -213,7 +213,7 @@ impl NextRandomUdpSocket {
 }
 
 impl Future for NextRandomUdpSocket {
-    type Item = tokio_udp::UdpSocket;
+    type Item = TokioUdpSocket;
     type Error = io::Error;
 
     /// polls until there is an available next random UDP port.
@@ -229,7 +229,7 @@ impl Future for NextRandomUdpSocket {
             let zero_addr = SocketAddr::new(self.bind_address, port);
 
             // TODO: allow TTL to be adjusted...
-            match tokio_udp::UdpSocket::bind(&zero_addr) {
+            match TokioUdpSocket::bind(&zero_addr) {
                 Ok(socket) => {
                     debug!("created socket: {:?}", socket);
                     return Ok(Async::Ready(socket));
@@ -263,7 +263,12 @@ impl Future for NextRandomUdpSocket {
                         debug!("socket bind() failed: {}", e);
                     }
                     if let Err(e) = bind_if::bind_to_if4(s.as_raw_socket(), self.bind_if) {
-                        debug!("bind socket {} to if {} failed: {}", s.as_raw_socket(), self.bind_if ,e);
+                        debug!(
+                            "bind socket {} to if {} failed: {}",
+                            s.as_raw_socket(),
+                            self.bind_if,
+                            e
+                        );
                     }
                     s
                 }
@@ -274,7 +279,12 @@ impl Future for NextRandomUdpSocket {
                         debug!("socket bind() failed: {}", e);
                     }
                     if let Err(e) = bind_if::bind_to_if6(s.as_raw_socket(), self.bind_if) {
-                        debug!("bind socket {} to if {} failed: {}", s.as_raw_socket(), self.bind_if, e);
+                        debug!(
+                            "bind socket {} to if {} failed: {}",
+                            s.as_raw_socket(),
+                            self.bind_if,
+                            e
+                        );
                     }
                     s
                 }
@@ -282,7 +292,7 @@ impl Future for NextRandomUdpSocket {
 
             // TODO: allow TTL to be adjusted...
             let handle = Handle::current();
-            match tokio_udp::UdpSocket::from_std(socket.into_udp_socket(), &handle) {
+            match TokioUdpSocket::from_std(socket.into_udp_socket(), &handle) {
                 Ok(socket) => {
                     debug!("created socket: {:?}", socket);
                     return Ok(Async::Ready(socket));
@@ -388,9 +398,8 @@ fn udp_stream_test(server_addr: IpAddr) {
         std::net::SocketAddr::V6(_) => "[::1]:0",
     };
 
-    let socket =
-        tokio_udp::UdpSocket::bind(&client_addr.to_socket_addrs().unwrap().next().unwrap())
-            .expect("could not create socket"); // some random address...
+    let socket = TokioUdpSocket::bind(&client_addr.to_socket_addrs().unwrap().next().unwrap())
+        .expect("could not create socket"); // some random address...
     let (mut stream, sender) = UdpStream::with_bound(socket);
     //let mut stream: UdpStream = io_loop.block_on(stream).ok().unwrap();
 

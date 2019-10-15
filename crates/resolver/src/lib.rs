@@ -201,7 +201,6 @@ extern crate serde;
 extern crate smallvec;
 #[cfg(any(feature = "tokio", test))]
 extern crate tokio;
-extern crate tokio_executor;
 #[cfg(feature = "dns-over-https")]
 extern crate trust_dns_https;
 #[cfg(feature = "dns-over-native-tls")]

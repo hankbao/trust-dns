@@ -17,19 +17,31 @@ use futures::sync::mpsc::{unbounded, UnboundedReceiver};
 use futures::{Async, Future, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream as TokioTcpStream;
-use tokio_timer::Timeout;
+use tokio::timer::Timeout;
 
 #[cfg(feature = "bindif")]
 use std::os::windows::io::AsRawSocket;
 #[cfg(feature = "bindif")]
 use socket2::{Domain, Protocol, Socket, Type};
 #[cfg(feature = "bindif")]
-use tokio_reactor::Handle;
+use tokio::reactor::Handle;
 #[cfg(feature = "bindif")]
 use crate::bind_if;
 
 use crate::error::*;
 use crate::xfer::{BufStreamHandle, SerialMessage};
+
+macro_rules! try_nb {
+    ($e:expr) => {
+        match $e {
+            Ok(t) => t,
+            Err(ref e) if e.kind() == ::std::io::ErrorKind::WouldBlock => {
+                return Ok(::futures::Async::NotReady);
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
+}
 
 /// Current state while writing to the remote of the TCP connection
 enum WriteTcpState {
@@ -249,7 +261,7 @@ impl TcpStream<TokioTcpStream> {
 }
 
 impl<S: AsyncRead + AsyncWrite> TcpStream<S> {
-    /// Initializes a TcpStream with an existing tokio_tcp::TcpStream.
+    /// Initializes a TcpStream with an existing tokio::net::TcpStream.
     ///
     /// This is intended for use with a TcpListener and Incoming.
     ///

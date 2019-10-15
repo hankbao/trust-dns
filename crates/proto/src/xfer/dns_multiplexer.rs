@@ -20,7 +20,7 @@ use futures::{task, Async, Future, Poll};
 use rand;
 use rand::distributions::{Distribution, Standard};
 use smallvec::SmallVec;
-use tokio_timer::Delay;
+use tokio::timer::Delay;
 
 use crate::error::*;
 use crate::op::{Message, MessageFinalizer, OpCode};

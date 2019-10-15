@@ -12,8 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::{Async, Future, Poll, Stream};
-use tokio_timer::Timeout;
-use tokio_udp;
+use tokio::timer::Timeout;
 
 use crate::error::ProtoError;
 use crate::op::message::NoopMessageFinalizer;
@@ -299,8 +298,8 @@ enum SingleUseUdpSocket {
     #[cfg(feature = "bindif")]
     StartSend(Option<SerialMessage>, u16, u32),
     Connect(Option<SerialMessage>, NextRandomUdpSocket, u16),
-    Send(Option<SerialMessage>, Option<tokio_udp::UdpSocket>, u16),
-    AwaitResponse(Option<SerialMessage>, tokio_udp::UdpSocket, u16),
+    Send(Option<SerialMessage>, Option<tokio::net::UdpSocket>, u16),
+    AwaitResponse(Option<SerialMessage>, tokio::net::UdpSocket, u16),
     Response(Option<Message>),
     Errored(Option<ProtoError>),
 }
