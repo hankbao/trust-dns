@@ -112,7 +112,7 @@ impl TcpStream<TokioTcpStream> {
     pub fn new<E>(
         name_server: SocketAddr,
     ) -> (
-        Box<Future<Item = TcpStream<TokioTcpStream>, Error = io::Error> + Send>,
+        Box<dyn Future<Item = TcpStream<TokioTcpStream>, Error = io::Error> + Send>,
         BufStreamHandle,
     )
     where
@@ -121,12 +121,20 @@ impl TcpStream<TokioTcpStream> {
         Self::with_timeout(name_server, Duration::from_secs(5))
     }
 
+    /// Creates a new future of the eventually establish a IO stream connection or fail trying.
+    ///
+    /// Defaults to a 5 second timeout
+    ///
+    /// # Arguments
+    ///
+    /// * `name_server` - the IP and Port of the DNS server to connect to
+    /// * `bind_if` - the interface index to bind
     #[cfg(feature = "bindif")]
     pub fn new<E>(
         name_server: SocketAddr,
         bind_if: u32,
     ) -> (
-        Box<Future<Item = TcpStream<TokioTcpStream>, Error = io::Error> + Send>,
+        Box<dyn Future<Item = TcpStream<TokioTcpStream>, Error = io::Error> + Send>,
         BufStreamHandle,
     )
     where
@@ -146,7 +154,7 @@ impl TcpStream<TokioTcpStream> {
         name_server: SocketAddr,
         timeout: Duration,
     ) -> (
-        Box<Future<Item = TcpStream<TokioTcpStream>, Error = io::Error> + Send>,
+        Box<dyn Future<Item = TcpStream<TokioTcpStream>, Error = io::Error> + Send>,
         BufStreamHandle,
     ) {
         let (message_sender, outbound_messages) = unbounded();
@@ -181,6 +189,13 @@ impl TcpStream<TokioTcpStream> {
         (Box::new(stream), message_sender)
     }
 
+    /// Creates a new future of the eventually establish a IO stream connection or fail trying
+    ///
+    /// # Arguments
+    ///
+    /// * `name_server` - the IP and Port of the DNS server to connect to
+    /// * `timeout` - connection timeout
+    /// * `bind_if` - the interface index to bind
     #[cfg(feature = "bindif")]
     #[allow(deprecated)]
     pub fn with_timeout(
@@ -188,7 +203,7 @@ impl TcpStream<TokioTcpStream> {
         timeout: Duration,
         bind_if: u32,
     ) -> (
-        Box<Future<Item = TcpStream<TokioTcpStream>, Error = io::Error> + Send>,
+        Box<dyn Future<Item = TcpStream<TokioTcpStream>, Error = io::Error> + Send>,
         BufStreamHandle,
     ) {
         use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -510,12 +525,12 @@ impl<S: AsyncRead + AsyncWrite> Stream for TcpStream<S> {
         if let Some(buffer) = ret_buf {
             debug!("returning buffer");
             let src_addr = self.peer_addr;
-            return Ok(Async::Ready(Some(SerialMessage::new(buffer, src_addr))));
+            Ok(Async::Ready(Some(SerialMessage::new(buffer, src_addr))))
         } else {
             debug!("bottomed out");
             // at a minimum the outbound_messages should have been polled,
             //  which will wake this future up later...
-            return Ok(Async::NotReady);
+            Ok(Async::NotReady)
         }
     }
 }

@@ -39,7 +39,7 @@ impl<H> DnsHandle for RetryDnsHandle<H>
 where
     H: DnsHandle + 'static,
 {
-    type Response = Box<Future<Item = DnsResponse, Error = ProtoError> + Send>;
+    type Response = Box<dyn Future<Item = DnsResponse, Error = ProtoError> + Send>;
 
     fn send<R: Into<DnsRequest>>(&mut self, request: R) -> Self::Response {
         let request = request.into();

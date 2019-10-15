@@ -52,7 +52,7 @@ impl UdpStream {
     pub fn new(
         name_server: SocketAddr,
     ) -> (
-        Box<Future<Item = UdpStream, Error = io::Error> + Send>,
+        Box<dyn Future<Item = UdpStream, Error = io::Error> + Send>,
         BufStreamHandle,
     ) {
         let (message_sender, outbound_messages) = unbounded();
@@ -72,12 +72,26 @@ impl UdpStream {
         (stream, message_sender)
     }
 
+    /// This method is intended for client connections, see `with_bound` for a method better for
+    ///  straight listening. It is expected that the resolver wrapper will be responsible for
+    ///  creating and managing new UdpStreams such that each new client would have a random port
+    ///  (reduce chance of cache poisoning). This will return a randomly assigned local port.
+    ///
+    /// # Arguments
+    ///
+    /// * `name_server` - socket address for the remote server (used to determine IPv4 or IPv6)
+    /// * `bind_if` - the interface index to bind
+    ///
+    /// # Return
+    ///
+    /// a tuple of a Future Stream which will handle sending and receiving messsages, and a
+    ///  handle which can be used to send messages into the stream
     #[cfg(feature = "bindif")]
     pub fn new(
         name_server: SocketAddr,
         bind_if: u32,
     ) -> (
-        Box<Future<Item = UdpStream, Error = io::Error> + Send>,
+        Box<dyn Future<Item = UdpStream, Error = io::Error> + Send>,
         BufStreamHandle,
     ) {
         let (message_sender, outbound_messages) = unbounded();
@@ -198,6 +212,7 @@ impl NextRandomUdpSocket {
         }
     }
 
+    /// Creates a future for randomly binding to a local socket address for client connections.
     #[cfg(feature = "bindif")]
     pub(crate) fn new(name_server: &SocketAddr, bind_if: u32) -> NextRandomUdpSocket {
         let zero_addr: IpAddr = match *name_server {
@@ -245,6 +260,9 @@ impl Future for NextRandomUdpSocket {
         Ok(Async::NotReady)
     }
 
+    /// polls until there is an available next random UDP port.
+    ///
+    /// if there is no port available after 10 attempts, returns NotReady
     #[cfg(feature = "bindif")]
     #[allow(deprecated)]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {

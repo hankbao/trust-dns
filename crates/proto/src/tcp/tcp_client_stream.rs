@@ -36,12 +36,20 @@ impl TcpClientStream<TokioTcpStream> {
     /// * `name_server` - the IP and Port of the DNS server to connect to
     #[cfg(not(feature = "bindif"))]
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(name_server: SocketAddr) -> (TcpClientConnect, Box<DnsStreamHandle + Send>) {
+    pub fn new(name_server: SocketAddr) -> (TcpClientConnect, Box<dyn DnsStreamHandle + Send>) {
         Self::with_timeout(name_server, Duration::from_secs(5))
     }
 
+    /// Constructs a new TcpStream for a client to the specified SocketAddr.
+    ///
+    /// Defaults to a 5 second timeout
+    ///
+    /// # Arguments
+    ///
+    /// * `name_server` - the IP and Port of the DNS server to connect to
+    /// * `bind_if` - the interface index to bind
     #[cfg(feature = "bindif")]
-    pub fn new(name_server: SocketAddr, bind_if: u32) -> (TcpClientConnect, Box<DnsStreamHandle + Send>) {
+    pub fn new(name_server: SocketAddr, bind_if: u32) -> (TcpClientConnect, Box<dyn DnsStreamHandle + Send>) {
         Self::with_timeout(name_server, Duration::from_secs(5), bind_if)
     }
 
@@ -55,7 +63,7 @@ impl TcpClientStream<TokioTcpStream> {
     pub fn with_timeout(
         name_server: SocketAddr,
         timeout: Duration,
-    ) -> (TcpClientConnect, Box<DnsStreamHandle + Send>) {
+    ) -> (TcpClientConnect, Box<dyn DnsStreamHandle + Send>) {
         let (stream_future, sender) = TcpStream::with_timeout(name_server, timeout);
 
         let new_future = Box::new(
@@ -69,12 +77,19 @@ impl TcpClientStream<TokioTcpStream> {
         (TcpClientConnect(new_future), sender)
     }
 
+    /// Constructs a new TcpStream for a client to the specified SocketAddr.
+    ///
+    /// # Arguments
+    ///
+    /// * `name_server` - the IP and Port of the DNS server to connect to
+    /// * `timeout` - connection timeout
+    /// * `bind_if` - the interface index to bind
     #[cfg(feature = "bindif")]
     pub fn with_timeout(
         name_server: SocketAddr,
         timeout: Duration,
         bind_if: u32,
-    ) -> (TcpClientConnect, Box<DnsStreamHandle + Send>) {
+    ) -> (TcpClientConnect, Box<dyn DnsStreamHandle + Send>) {
         let (stream_future, sender) = TcpStream::with_timeout(name_server, timeout, bind_if);
 
         let new_future = Box::new(
@@ -132,7 +147,7 @@ impl<S: AsyncRead + AsyncWrite + Send> Stream for TcpClientStream<S> {
 // TODO: create unboxed future for the TCP Stream
 /// A future that resolves to an TcpClientStream
 pub struct TcpClientConnect(
-    Box<Future<Item = TcpClientStream<TokioTcpStream>, Error = ProtoError> + Send>,
+    Box<dyn Future<Item = TcpClientStream<TokioTcpStream>, Error = ProtoError> + Send>,
 );
 
 impl Future for TcpClientConnect {

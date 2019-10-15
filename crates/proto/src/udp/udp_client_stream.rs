@@ -52,6 +52,14 @@ impl UdpClientStream<NoopMessageFinalizer> {
         Self::with_timeout(name_server, Duration::from_secs(5))
     }
 
+    /// it is expected that the resolver wrapper will be responsible for creating and managing
+    ///  new UdpClients such that each new client would have a random port (reduce chance of cache
+    ///  poisoning)
+    ///
+    /// # Return
+    ///
+    /// a tuple of a Future Stream which will handle sending and receiving messsages, and a
+    ///  handle which can be used to send messages into the stream.
     #[cfg(feature = "bindif")]
     pub fn new(name_server: SocketAddr, bind_if: u32) -> UdpClientConnect<NoopMessageFinalizer> {
         Self::with_timeout(name_server, Duration::from_secs(5), bind_if)
@@ -71,6 +79,13 @@ impl UdpClientStream<NoopMessageFinalizer> {
         Self::with_timeout_and_signer(name_server, timeout, None)
     }
 
+    /// Constructs a new TcpStream for a client to the specified SocketAddr.
+    ///
+    /// # Arguments
+    ///
+    /// * `name_server` - the IP and Port of the DNS server to connect to
+    /// * `timeout` - connection timeout
+    /// * `bind_if` - the interface index to bind
     #[cfg(feature = "bindif")]
     pub fn with_timeout(
         name_server: SocketAddr,
@@ -101,6 +116,13 @@ impl<MF: MessageFinalizer> UdpClientStream<MF> {
         }
     }
 
+    /// Constructs a new TcpStream for a client to the specified SocketAddr.
+    ///
+    /// # Arguments
+    ///
+    /// * `name_server` - the IP and Port of the DNS server to connect to
+    /// * `timeout` - connection timeout
+    /// * `bind_if` - the interface index to bind
     #[cfg(feature = "bindif")]
     pub fn with_timeout_and_signer(
         name_server: SocketAddr,
@@ -243,6 +265,13 @@ impl UdpResponse {
         ))
     }
 
+    /// creates a new future for the request
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - Serialized message being sent
+    /// * `message_id` - Id of the message that was encoded in the serial message
+    /// * `bind_if` - the interface index to bind
     #[cfg(feature = "bindif")]
     fn new(request: SerialMessage, message_id: u16, timeout: Duration, bind_if: u32) -> Self {
         UdpResponse(Timeout::new(
