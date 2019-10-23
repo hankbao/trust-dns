@@ -90,14 +90,8 @@ rusqlite = { version = "0.18.0", features = ["bundled"] }
 rustls = { version = "0.15", optional = true }
 serde = { version = "1.0.91", features = ["derive"] }
 time = "0.1"
-tokio = "0.1.15"
-tokio-executor = "0.1.7"
-tokio-io = "0.1"
-tokio-reactor = "0.1"
+tokio = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }
 tokio-rustls = { version = "0.9", optional = true }
-tokio-tcp = "0.1"
-tokio-timer = "0.2.10"
-tokio-udp = "0.1"
 toml = "0.5"
 trust-dns = { version = "0.16.0", path = "../client" }
 trust-dns-https = { version = "0.3.0", path = "../https", optional = true }

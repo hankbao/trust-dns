@@ -3,7 +3,7 @@ use std::mem;
 use std::time::{Duration, Instant};
 
 use futures::{Async, Future, Poll, Stream};
-use tokio_timer::Delay;
+use tokio::timer::Delay;
 
 /// This wraps the underlying Stream in a timeout.
 ///

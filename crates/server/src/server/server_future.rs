@@ -14,10 +14,8 @@ use futures::{Async, Future, Poll, Stream};
 
 #[cfg(feature = "dns-over-rustls")]
 use rustls::{Certificate, PrivateKey};
-use tokio_executor;
-use tokio_reactor::Handle;
-use tokio_tcp;
-use tokio_udp;
+use tokio;
+use tokio::reactor::Handle;
 
 use proto::op::Edns;
 use proto::serialize::binary::{BinDecodable, BinDecoder};
@@ -47,7 +45,7 @@ impl<T: RequestHandler> ServerFuture<T> {
     }
 
     /// Register a UDP socket. Should be bound before calling this function.
-    pub fn register_socket(&self, socket: tokio_udp::UdpSocket) {
+    pub fn register_socket(&self, socket: tokio::net::UdpSocket) {
         debug!("registered udp: {:?}", socket);
 
         // create the new UdpStream
@@ -56,7 +54,7 @@ impl<T: RequestHandler> ServerFuture<T> {
         let handler = self.handler.clone();
 
         // this spawns a ForEach future which handles all the requests into a Handler.
-        tokio_executor::spawn(
+        tokio::executor::spawn(
             buf_stream
                 .map_err(|e| panic!("error in UDP request_stream handler: {}", e))
                 .for_each(move |message| {
@@ -70,7 +68,7 @@ impl<T: RequestHandler> ServerFuture<T> {
     /// Register a UDP socket. Should be bound before calling this function.
     pub fn register_socket_std(&self, socket: std::net::UdpSocket) {
         self.register_socket(
-            tokio_udp::UdpSocket::from_std(socket, &Handle::default()).expect("bad handle?"),
+            tokio::net::UdpSocket::from_std(socket, &Handle::default()).expect("bad handle?"),
         )
     }
 
@@ -88,14 +86,14 @@ impl<T: RequestHandler> ServerFuture<T> {
     ///               only, this would require some type of whitelisting.
     pub fn register_listener(
         &self,
-        listener: tokio_tcp::TcpListener,
+        listener: tokio::net::TcpListener,
         timeout: Duration,
     ) -> io::Result<()> {
         let handler = self.handler.clone();
         debug!("registered tcp: {:?}", listener);
 
         // for each incoming request...
-        tokio_executor::spawn(
+        tokio::executor::spawn(
             listener
                 .incoming()
                 .for_each(move |tcp_stream| {
@@ -108,7 +106,7 @@ impl<T: RequestHandler> ServerFuture<T> {
                     let handler = handler.clone();
 
                     // and spawn to the io_loop
-                    tokio_executor::spawn(
+                    tokio::executor::spawn(
                         timeout_stream
                             .map_err(move |e| {
                                 debug!(
@@ -151,7 +149,7 @@ impl<T: RequestHandler> ServerFuture<T> {
         timeout: Duration,
     ) -> io::Result<()> {
         self.register_listener(
-            tokio_tcp::TcpListener::from_std(listener, &Handle::default())?,
+            tokio::net::TcpListener::from_std(listener, &Handle::default())?,
             timeout,
         )
     }
@@ -172,7 +170,7 @@ impl<T: RequestHandler> ServerFuture<T> {
     #[cfg(all(feature = "dns-over-openssl", not(feature = "dns-over-rustls")))]
     pub fn register_tls_listener(
         &self,
-        listener: tokio_tcp::TcpListener,
+        listener: tokio::net::TcpListener,
         timeout: Duration,
         certificate_and_key: ((X509, Option<Stack<X509>>), PKey<Private>),
     ) -> io::Result<()> {
@@ -186,7 +184,7 @@ impl<T: RequestHandler> ServerFuture<T> {
         let tls_acceptor = tls_server::new_acceptor(cert, chain, key)?;
 
         // for each incoming request...
-        tokio_executor::spawn(future::lazy(move || {
+        tokio::executor::spawn(future::lazy(move || {
             listener
                 .incoming()
                 .for_each(move |tcp_stream| {
@@ -211,7 +209,7 @@ impl<T: RequestHandler> ServerFuture<T> {
                             let handler = handler.clone();
 
                             // and spawn to the io_loop
-                            tokio_executor::spawn(
+                            tokio::executor::spawn(
                                 timeout_stream
                                     .map_err(move |e| {
                                         debug!(
@@ -265,7 +263,7 @@ impl<T: RequestHandler> ServerFuture<T> {
         certificate_and_key: ((X509, Option<Stack<X509>>), PKey<Private>),
     ) -> io::Result<()> {
         self.register_tls_listener(
-            tokio_tcp::TcpListener::from_std(listener, &Handle::default())?,
+            tokio::net::TcpListener::from_std(listener, &Handle::default())?,
             timeout,
             certificate_and_key,
         )
@@ -287,7 +285,7 @@ impl<T: RequestHandler> ServerFuture<T> {
     #[cfg(feature = "dns-over-rustls")]
     pub fn register_tls_listener(
         &self,
-        listener: tokio_tcp::TcpListener,
+        listener: tokio::net::TcpListener,
         timeout: Duration,
         certificate_and_key: (Vec<Certificate>, PrivateKey),
     ) -> io::Result<()> {
@@ -309,7 +307,7 @@ impl<T: RequestHandler> ServerFuture<T> {
         let tls_acceptor = TlsAcceptor::from(Arc::new(tls_acceptor));
 
         // for each incoming request...
-        tokio_executor::spawn(future::lazy(move || {
+        tokio::executor::spawn(future::lazy(move || {
             listener
                 .incoming()
                 .for_each(move |tcp_stream| {
@@ -334,7 +332,7 @@ impl<T: RequestHandler> ServerFuture<T> {
                             let handler = handler.clone();
 
                             // and spawn to the io_loop
-                            tokio_executor::spawn(
+                            tokio::executor::spawn(
                                 timeout_stream
                                     .map_err(move |e| {
                                         debug!(
@@ -386,7 +384,7 @@ impl<T: RequestHandler> ServerFuture<T> {
     ))]
     pub fn register_https_listener(
         &self,
-        listener: tokio_tcp::TcpListener,
+        listener: tokio::net::TcpListener,
         timeout: Duration,
         pkcs12: ParsedPkcs12,
     ) -> io::Result<()> {
@@ -409,7 +407,7 @@ impl<T: RequestHandler> ServerFuture<T> {
     #[cfg(feature = "dns-over-https-rustls")]
     pub fn register_https_listener(
         &self,
-        listener: tokio_tcp::TcpListener,
+        listener: tokio::net::TcpListener,
         // TODO: need to set a timeout between requests.
         _timeout: Duration,
         certificate_and_key: (Vec<Certificate>, PrivateKey),
@@ -436,7 +434,7 @@ impl<T: RequestHandler> ServerFuture<T> {
 
         // for each incoming request...
         let dns_hostname = dns_hostname.clone();
-        tokio_executor::spawn(future::lazy(move || {
+        tokio::executor::spawn(future::lazy(move || {
             let dns_hostname = dns_hostname.clone();
 
             listener
