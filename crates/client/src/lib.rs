@@ -278,7 +278,6 @@ extern crate serde;
 extern crate tokio;
 #[cfg(feature = "tokio-openssl")]
 extern crate tokio_openssl;
-extern crate tokio_tcp;
 #[cfg(feature = "tokio-tls")]
 extern crate tokio_tls;
 #[cfg(feature = "dns-over-https")]
