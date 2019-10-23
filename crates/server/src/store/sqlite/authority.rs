@@ -779,7 +779,7 @@ impl SqliteAuthority {
                 DNSClass::NONE => {
                     info!("deleting specific record: {:?}", rr);
                     // NONE     rrset    rr       Delete an RR from an RRset
-                    if let Some(mut rrset) = self.records_mut().get_mut(&rr_key) {
+                    if let Some(rrset) = self.records_mut().get_mut(&rr_key) {
                         // b/c this is an Arc, we need to clone, then remove, and replace the node.
                         let mut rrset_clone: RecordSet = RecordSet::clone(&*rrset);
                         let deleted = rrset_clone.remove(rr, serial);
@@ -952,7 +952,7 @@ impl Authority for SqliteAuthority {
         query: &LowerQuery,
         is_secure: bool,
         supported_algorithms: SupportedAlgorithms,
-    ) -> Box<Future<Item = Self::Lookup, Error = LookupError> + Send> {
+    ) -> Box<dyn Future<Item = Self::Lookup, Error = LookupError> + Send> {
         self.in_memory
             .search(query, is_secure, supported_algorithms)
     }
