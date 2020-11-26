@@ -7,15 +7,21 @@
 
 //! SSHFP records for SSH public key fingerprints
 
+use data_encoding::{Encoding, Specification};
+
 use error::*;
 use rr::rdata::SSHFP;
 
-const HEX: ::data_encoding::Encoding = new_encoding! {
-    symbols: "0123456789abcdef",
-    ignore: " \t\r\n",
-    translate_from: "ABCDEF",
-    translate_to: "abcdef",
-};
+lazy_static! {
+    static ref HEX: Encoding = {
+        let mut spec = Specification::new();
+        spec.symbols.push_str("0123456789abcdef");
+        spec.ignore.push_str(" \t\r\n");
+        spec.translate.from.push_str("ABCDEF");
+        spec.translate.to.push_str("abcdef");
+        spec.encoding().expect("error in sshfp HEX encoding")
+    };
+}
 
 /// Parse the RData from a set of Tokens
 ///
