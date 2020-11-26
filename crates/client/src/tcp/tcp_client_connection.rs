@@ -11,9 +11,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::net::TcpStream;
 use proto::tcp::{TcpClientConnect, TcpClientStream};
 use proto::xfer::{DnsMultiplexer, DnsMultiplexerConnect, DnsRequestSender};
+use tokio::net::TcpStream;
 
 use client::ClientConnection;
 use error::*;
@@ -65,8 +65,12 @@ impl ClientConnection for TcpClientConnection {
     type SenderFuture = DnsMultiplexerConnect<TcpClientConnect, TcpClientStream<TcpStream>, Signer>;
 
     fn new_stream(&self, signer: Option<Arc<Signer>>) -> Self::SenderFuture {
+        #[cfg(not(feature = "bindif"))]
         let (tcp_client_stream, handle) =
             TcpClientStream::<TcpStream>::with_timeout(self.name_server, self.timeout);
+        #[cfg(feature = "bindif")]
+        let (tcp_client_stream, handle) =
+            TcpClientStream::<TcpStream>::with_timeout(self.name_server, self.timeout, u32::MAX); // u32::MAX means not bind
         DnsMultiplexer::new(tcp_client_stream, handle, signer)
     }
 }

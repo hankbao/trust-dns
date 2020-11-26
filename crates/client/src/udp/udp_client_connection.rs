@@ -39,7 +39,10 @@ impl UdpClientConnection {
 
     /// Allows a custom timeout
     pub fn with_timeout(name_server: SocketAddr, timeout: Duration) -> ClientResult<Self> {
-        Ok(UdpClientConnection {name_server, timeout})
+        Ok(UdpClientConnection {
+            name_server,
+            timeout,
+        })
     }
 }
 
@@ -48,10 +51,15 @@ impl ClientConnection for UdpClientConnection {
     type Response = <Self::Sender as DnsRequestSender>::DnsResponseFuture;
     type SenderFuture = UdpClientConnect<Signer>;
 
-    fn new_stream(
-        &self,
-        signer: Option<Arc<Signer>>,
-    ) -> Self::SenderFuture {
-        UdpClientStream::with_timeout_and_signer(self.name_server, self.timeout, signer)
+    fn new_stream(&self, signer: Option<Arc<Signer>>) -> Self::SenderFuture {
+        #[cfg(not(feature = "bindif"))]
+        return UdpClientStream::with_timeout_and_signer(self.name_server, self.timeout, signer);
+        #[cfg(feature = "bindif")]
+        return UdpClientStream::with_timeout_and_signer(
+            self.name_server,
+            self.timeout,
+            signer,
+            u32::MAX, // u32::MAX means not bind
+        );
     }
 }
