@@ -63,6 +63,8 @@ tls = ["dns-over-openssl"]
 # WARNING: there is a bug in the mutual tls auth code at the moment see issue #100
 # mtls = ["trust-dns/mtls"]
 
+bindif = ["trust-dns/bindif", "trust-dns-resolver/bindif"]
+
 [lib]
 name = "trust_dns_server"
 path = "src/lib.rs"
