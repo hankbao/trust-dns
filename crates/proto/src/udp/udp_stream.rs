@@ -280,13 +280,16 @@ impl Future for NextRandomUdpSocket {
                     if let Err(e) = s.bind(&zero_addr.into()) {
                         debug!("socket bind() failed: {}", e);
                     }
-                    if let Err(e) = bind_if::bind_to_if4(s.as_raw_socket(), self.bind_if) {
-                        debug!(
-                            "bind socket {} to if {} failed: {}",
-                            s.as_raw_socket(),
-                            self.bind_if,
-                            e
-                        );
+                    // u32::MAX means not bind
+                    if self.bind_if != u32::MAX {
+                        if let Err(e) = bind_if::bind_to_if4(s.as_raw_socket(), self.bind_if) {
+                            debug!(
+                                "bind socket {} to if {} failed: {}",
+                                s.as_raw_socket(),
+                                self.bind_if,
+                                e
+                            );
+                        }
                     }
                     s
                 }
@@ -296,13 +299,16 @@ impl Future for NextRandomUdpSocket {
                     if let Err(e) = s.bind(&zero_addr.into()) {
                         debug!("socket bind() failed: {}", e);
                     }
-                    if let Err(e) = bind_if::bind_to_if6(s.as_raw_socket(), self.bind_if) {
-                        debug!(
-                            "bind socket {} to if {} failed: {}",
-                            s.as_raw_socket(),
-                            self.bind_if,
-                            e
-                        );
+                    // u32::MAX means not bind
+                    if self.bind_if != u32::MAX {
+                        if let Err(e) = bind_if::bind_to_if6(s.as_raw_socket(), self.bind_if) {
+                            debug!(
+                                "bind socket {} to if {} failed: {}",
+                                s.as_raw_socket(),
+                                self.bind_if,
+                                e
+                            );
+                        }
                     }
                     s
                 }

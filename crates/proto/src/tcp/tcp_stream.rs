@@ -20,13 +20,13 @@ use tokio::net::TcpStream as TokioTcpStream;
 use tokio::timer::Timeout;
 
 #[cfg(feature = "bindif")]
-use std::os::windows::io::AsRawSocket;
+use crate::bind_if;
 #[cfg(feature = "bindif")]
 use socket2::{Domain, Protocol, Socket, Type};
 #[cfg(feature = "bindif")]
-use tokio::reactor::Handle;
+use std::os::windows::io::AsRawSocket;
 #[cfg(feature = "bindif")]
-use crate::bind_if;
+use tokio::reactor::Handle;
 
 use crate::error::*;
 use crate::xfer::{BufStreamHandle, SerialMessage};
@@ -172,7 +172,8 @@ impl TcpStream<TokioTcpStream> {
                         format!("timed out connecting to: {}", name_server),
                     )
                 })
-            }).map(move |tcp_stream| {
+            })
+            .map(move |tcp_stream| {
                 debug!("TCP connection established to: {}", name_server);
                 TcpStream {
                     socket: tcp_stream,
@@ -222,8 +223,16 @@ impl TcpStream<TokioTcpStream> {
                         debug!("socket bind() failed: {}", e);
                     }
                 }
-                if let Err(e) = bind_if::bind_to_if4(s.as_raw_socket(), bind_if) {
-                    debug!("bind socket {} to if {} failed: {}", s.as_raw_socket(), bind_if, e);
+                // u32::MAX means not bind
+                if bind_if != u32::MAX {
+                    if let Err(e) = bind_if::bind_to_if4(s.as_raw_socket(), bind_if) {
+                        debug!(
+                            "bind socket {} to if {} failed: {}",
+                            s.as_raw_socket(),
+                            bind_if,
+                            e
+                        );
+                    }
                 }
                 s
             }
@@ -237,8 +246,16 @@ impl TcpStream<TokioTcpStream> {
                         debug!("socket bind() failed: {}", e);
                     }
                 }
-                if let Err(e) = bind_if::bind_to_if6(s.as_raw_socket(), bind_if) {
-                    debug!("bind socket {} to if {} failed: {}", s.as_raw_socket(), bind_if, e);
+                // u32::MAX means not bind
+                if bind_if != u32::MAX {
+                    if let Err(e) = bind_if::bind_to_if6(s.as_raw_socket(), bind_if) {
+                        debug!(
+                            "bind socket {} to if {} failed: {}",
+                            s.as_raw_socket(),
+                            bind_if,
+                            e
+                        );
+                    }
                 }
                 s
             }
@@ -257,7 +274,8 @@ impl TcpStream<TokioTcpStream> {
                         format!("timed out connecting to: {}", name_server),
                     )
                 })
-            }).map(move |tcp_stream| {
+            })
+            .map(move |tcp_stream| {
                 debug!("TCP connection established to: {}", name_server);
                 TcpStream {
                     socket: tcp_stream,
@@ -580,7 +598,8 @@ fn tcp_client_stream_test(server_addr: IpAddr) {
             }
 
             panic!("timeout");
-        }).unwrap();
+        })
+        .unwrap();
 
     // TODO: need a timeout on listen
     let server = std::net::TcpListener::bind(SocketAddr::new(server_addr, 0)).unwrap();
@@ -627,7 +646,8 @@ fn tcp_client_stream_test(server_addr: IpAddr) {
                 // println!("wrote bytes iter: {}", i);
                 std::thread::yield_now();
             }
-        }).unwrap();
+        })
+        .unwrap();
 
     // setup the client, which is going to run on the testing thread...
     let mut io_loop = Runtime::new().unwrap();
