@@ -47,7 +47,7 @@ impl UdpClientStream<NoopMessageFinalizer> {
     /// a tuple of a Future Stream which will handle sending and receiving messsages, and a
     ///  handle which can be used to send messages into the stream.
     #[allow(clippy::new_ret_no_self)]
-    #[cfg(not(feature = "bindif"))]
+    #[cfg(any(unix, not(feature = "bindif")))]
     pub fn new(name_server: SocketAddr) -> UdpClientConnect<NoopMessageFinalizer> {
         Self::with_timeout(name_server, Duration::from_secs(5))
     }
@@ -71,7 +71,7 @@ impl UdpClientStream<NoopMessageFinalizer> {
     ///
     /// * `name_server` - the IP and Port of the DNS server to connect to
     /// * `timeout` - connection timeout
-    #[cfg(not(feature = "bindif"))]
+    #[cfg(any(unix, not(feature = "bindif")))]
     pub fn with_timeout(
         name_server: SocketAddr,
         timeout: Duration,
@@ -103,7 +103,7 @@ impl<MF: MessageFinalizer> UdpClientStream<MF> {
     ///
     /// * `name_server` - the IP and Port of the DNS server to connect to
     /// * `timeout` - connection timeout
-    #[cfg(not(feature = "bindif"))]
+    #[cfg(any(unix, not(feature = "bindif")))]
     pub fn with_timeout_and_signer(
         name_server: SocketAddr,
         timeout: Duration,
@@ -209,7 +209,7 @@ impl<MF: MessageFinalizer> DnsRequestSender for UdpClientStream<MF> {
         let message_id = message.id();
         let message = SerialMessage::new(bytes, self.name_server);
 
-        #[cfg(not(feature = "bindif"))]
+        #[cfg(any(unix, not(feature = "bindif")))]
         return UdpResponse::new(message, message_id, self.timeout);
 
         #[cfg(all(windows, feature = "bindif"))]
@@ -257,7 +257,7 @@ impl UdpResponse {
     ///
     /// * `request` - Serialized message being sent
     /// * `message_id` - Id of the message that was encoded in the serial message
-    #[cfg(not(feature = "bindif"))]
+    #[cfg(any(unix, not(feature = "bindif")))]
     fn new(request: SerialMessage, message_id: u16, timeout: Duration) -> Self {
         UdpResponse(Timeout::new(
             SingleUseUdpSocket::StartSend(Some(request), message_id),
@@ -322,7 +322,7 @@ impl<MF: MessageFinalizer> Future for UdpClientConnect<MF> {
 }
 
 enum SingleUseUdpSocket {
-    #[cfg(not(feature = "bindif"))]
+    #[cfg(any(unix, not(feature = "bindif")))]
     StartSend(Option<SerialMessage>, u16),
     #[cfg(all(windows, feature = "bindif"))]
     StartSend(Option<SerialMessage>, u16, u32),
@@ -340,7 +340,7 @@ impl Future for SingleUseUdpSocket {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
             *self = match *self {
-                #[cfg(not(feature = "bindif"))]
+                #[cfg(any(unix, not(feature = "bindif")))]
                 SingleUseUdpSocket::StartSend(ref mut msg, msg_id) => {
                     // get a new socket to use
                     let msg = msg.take();
@@ -358,7 +358,11 @@ impl Future for SingleUseUdpSocket {
                         .as_ref()
                         .expect("SingleUseUdpSocket::StartSend invalid state: msg")
                         .addr();
-                    SingleUseUdpSocket::Connect(msg, NextRandomUdpSocket::new(&name_server, bind_if), msg_id)
+                    SingleUseUdpSocket::Connect(
+                        msg,
+                        NextRandomUdpSocket::new(&name_server, bind_if),
+                        msg_id,
+                    )
                 }
                 SingleUseUdpSocket::Connect(ref mut msg, ref mut future_socket, msg_id) => {
                     let socket = try_ready!(future_socket.poll());

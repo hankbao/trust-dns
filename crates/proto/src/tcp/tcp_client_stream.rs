@@ -34,7 +34,7 @@ impl TcpClientStream<TokioTcpStream> {
     /// # Arguments
     ///
     /// * `name_server` - the IP and Port of the DNS server to connect to
-    #[cfg(not(feature = "bindif"))]
+    #[cfg(any(unix, not(feature = "bindif")))]
     #[allow(clippy::new_ret_no_self)]
     pub fn new(name_server: SocketAddr) -> (TcpClientConnect, Box<dyn DnsStreamHandle + Send>) {
         Self::with_timeout(name_server, Duration::from_secs(5))
@@ -49,7 +49,10 @@ impl TcpClientStream<TokioTcpStream> {
     /// * `name_server` - the IP and Port of the DNS server to connect to
     /// * `bind_if` - the interface index to bind
     #[cfg(all(windows, feature = "bindif"))]
-    pub fn new(name_server: SocketAddr, bind_if: u32) -> (TcpClientConnect, Box<dyn DnsStreamHandle + Send>) {
+    pub fn new(
+        name_server: SocketAddr,
+        bind_if: u32,
+    ) -> (TcpClientConnect, Box<dyn DnsStreamHandle + Send>) {
         Self::with_timeout(name_server, Duration::from_secs(5), bind_if)
     }
 
@@ -59,7 +62,7 @@ impl TcpClientStream<TokioTcpStream> {
     ///
     /// * `name_server` - the IP and Port of the DNS server to connect to
     /// * `timeout` - connection timeout
-    #[cfg(not(feature = "bindif"))]
+    #[cfg(any(unix, not(feature = "bindif")))]
     pub fn with_timeout(
         name_server: SocketAddr,
         timeout: Duration,

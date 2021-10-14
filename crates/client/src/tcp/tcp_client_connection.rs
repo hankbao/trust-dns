@@ -65,7 +65,7 @@ impl ClientConnection for TcpClientConnection {
     type SenderFuture = DnsMultiplexerConnect<TcpClientConnect, TcpClientStream<TcpStream>, Signer>;
 
     fn new_stream(&self, signer: Option<Arc<Signer>>) -> Self::SenderFuture {
-        #[cfg(not(feature = "bindif"))]
+        #[cfg(any(unix, not(feature = "bindif")))]
         let (tcp_client_stream, handle) =
             TcpClientStream::<TcpStream>::with_timeout(self.name_server, self.timeout);
         #[cfg(all(windows, feature = "bindif"))]

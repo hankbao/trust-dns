@@ -108,7 +108,7 @@ impl TcpStream<TokioTcpStream> {
     /// # Arguments
     ///
     /// * `name_server` - the IP and Port of the DNS server to connect to
-    #[cfg(not(feature = "bindif"))]
+    #[cfg(any(unix, not(feature = "bindif")))]
     pub fn new<E>(
         name_server: SocketAddr,
     ) -> (
@@ -149,7 +149,7 @@ impl TcpStream<TokioTcpStream> {
     ///
     /// * `name_server` - the IP and Port of the DNS server to connect to
     /// * `timeout` - connection timeout
-    #[cfg(not(feature = "bindif"))]
+    #[cfg(any(unix, not(feature = "bindif")))]
     pub fn with_timeout(
         name_server: SocketAddr,
         timeout: Duration,

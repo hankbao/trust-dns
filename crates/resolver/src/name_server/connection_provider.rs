@@ -136,7 +136,7 @@ impl ConnectionHandleConnect {
                 #[cfg(all(windows, feature = "bindif"))]
                 bind_if,
             } => {
-                #[cfg(not(feature = "bindif"))]
+                #[cfg(any(unix, not(feature = "bindif")))]
                 let stream = UdpClientStream::with_timeout(socket_addr, timeout);
                 #[cfg(all(windows, feature = "bindif"))]
                 let stream = UdpClientStream::with_timeout(socket_addr, timeout, bind_if);
@@ -157,7 +157,7 @@ impl ConnectionHandleConnect {
                 #[cfg(all(windows, feature = "bindif"))]
                 bind_if,
             } => {
-                #[cfg(not(feature = "bindif"))]
+                #[cfg(any(unix, not(feature = "bindif")))]
                 let (stream, handle) = TcpClientStream::with_timeout(socket_addr, timeout);
                 #[cfg(all(windows, feature = "bindif"))]
                 let (stream, handle) = TcpClientStream::with_timeout(socket_addr, timeout, bind_if);
