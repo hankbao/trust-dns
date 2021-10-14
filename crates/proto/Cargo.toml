@@ -83,7 +83,3 @@ features = [
 
 [dev-dependencies]
 env_logger = "^0.6"
-
-[patch.crates-io]
-mio = { git = "https://github.com/hankbao/mio.git", branch = "v0.6.x-windows" }
-tokio = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }

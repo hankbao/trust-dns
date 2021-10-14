@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/client", 
+members = ["crates/client",
            "crates/native-tls",
            "crates/openssl",
            "crates/proto",
@@ -10,3 +10,7 @@ members = ["crates/client",
            "tests/compatibility-tests",
            "tests/integration-tests",
            "util"]
+
+[patch.crates-io]
+mio = { git = "https://github.com/hankbao/mio.git", branch = "v0.6.x-windows" }
+tokio = { git = "https://github.com/hankbao/tokio.git", branch = "v0.1.x-windows" }
