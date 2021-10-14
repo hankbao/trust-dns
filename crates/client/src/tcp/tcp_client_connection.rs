@@ -68,7 +68,7 @@ impl ClientConnection for TcpClientConnection {
         #[cfg(not(feature = "bindif"))]
         let (tcp_client_stream, handle) =
             TcpClientStream::<TcpStream>::with_timeout(self.name_server, self.timeout);
-        #[cfg(feature = "bindif")]
+        #[cfg(all(windows, feature = "bindif"))]
         let (tcp_client_stream, handle) =
             TcpClientStream::<TcpStream>::with_timeout(self.name_server, self.timeout, u32::MAX); // u32::MAX means not bind
         DnsMultiplexer::new(tcp_client_stream, handle, signer)

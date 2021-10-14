@@ -41,7 +41,7 @@ extern crate tokio;
 extern crate untrusted;
 extern crate url;
 
-#[cfg(feature = "bindif")]
+#[cfg(all(windows, feature = "bindif"))]
 mod bind_if;
 
 pub mod error;

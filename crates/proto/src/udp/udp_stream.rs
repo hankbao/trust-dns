@@ -16,13 +16,13 @@ use rand;
 use rand::distributions::{uniform::Uniform, Distribution};
 use tokio::net::UdpSocket as TokioUdpSocket;
 
-#[cfg(feature = "bindif")]
+#[cfg(all(windows, feature = "bindif"))]
 use crate::bind_if;
-#[cfg(feature = "bindif")]
+#[cfg(all(windows, feature = "bindif"))]
 use socket2::{Domain, Protocol, Socket, Type};
-#[cfg(feature = "bindif")]
+#[cfg(all(windows, feature = "bindif"))]
 use std::os::windows::io::AsRawSocket;
-#[cfg(feature = "bindif")]
+#[cfg(all(windows, feature = "bindif"))]
 use tokio::reactor::Handle;
 
 use crate::xfer::{BufStreamHandle, SerialMessage};
@@ -86,7 +86,7 @@ impl UdpStream {
     ///
     /// a tuple of a Future Stream which will handle sending and receiving messsages, and a
     ///  handle which can be used to send messages into the stream
-    #[cfg(feature = "bindif")]
+    #[cfg(all(windows, feature = "bindif"))]
     pub fn new(
         name_server: SocketAddr,
         bind_if: u32,
@@ -194,7 +194,7 @@ impl Stream for UdpStream {
 #[must_use = "futures do nothing unless polled"]
 pub(crate) struct NextRandomUdpSocket {
     bind_address: IpAddr,
-    #[cfg(feature = "bindif")]
+    #[cfg(all(windows, feature = "bindif"))]
     bind_if: u32,
 }
 
@@ -213,7 +213,7 @@ impl NextRandomUdpSocket {
     }
 
     /// Creates a future for randomly binding to a local socket address for client connections.
-    #[cfg(feature = "bindif")]
+    #[cfg(all(windows, feature = "bindif"))]
     pub(crate) fn new(name_server: &SocketAddr, bind_if: u32) -> NextRandomUdpSocket {
         let zero_addr: IpAddr = match *name_server {
             SocketAddr::V4(..) => IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
@@ -263,7 +263,7 @@ impl Future for NextRandomUdpSocket {
     /// polls until there is an available next random UDP port.
     ///
     /// if there is no port available after 10 attempts, returns NotReady
-    #[cfg(feature = "bindif")]
+    #[cfg(all(windows, feature = "bindif"))]
     #[allow(deprecated)]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let rand_port_range = Uniform::new_inclusive(1025_u16, u16::max_value());

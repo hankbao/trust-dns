@@ -19,13 +19,13 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio::timer::Timeout;
 
-#[cfg(feature = "bindif")]
+#[cfg(all(windows, feature = "bindif"))]
 use crate::bind_if;
-#[cfg(feature = "bindif")]
+#[cfg(all(windows, feature = "bindif"))]
 use socket2::{Domain, Protocol, Socket, Type};
-#[cfg(feature = "bindif")]
+#[cfg(all(windows, feature = "bindif"))]
 use std::os::windows::io::AsRawSocket;
-#[cfg(feature = "bindif")]
+#[cfg(all(windows, feature = "bindif"))]
 use tokio::reactor::Handle;
 
 use crate::error::*;
@@ -129,7 +129,7 @@ impl TcpStream<TokioTcpStream> {
     ///
     /// * `name_server` - the IP and Port of the DNS server to connect to
     /// * `bind_if` - the interface index to bind
-    #[cfg(feature = "bindif")]
+    #[cfg(all(windows, feature = "bindif"))]
     pub fn new<E>(
         name_server: SocketAddr,
         bind_if: u32,
@@ -197,7 +197,7 @@ impl TcpStream<TokioTcpStream> {
     /// * `name_server` - the IP and Port of the DNS server to connect to
     /// * `timeout` - connection timeout
     /// * `bind_if` - the interface index to bind
-    #[cfg(feature = "bindif")]
+    #[cfg(all(windows, feature = "bindif"))]
     #[allow(deprecated)]
     pub fn with_timeout(
         name_server: SocketAddr,
