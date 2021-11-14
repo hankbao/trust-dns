@@ -1,5 +1,5 @@
 // bind_if.rs
-#![cfg(all(windows, feature = "bindif"))]
+#![cfg(feature = "bindif")]
 
 use std::io;
 use std::mem;

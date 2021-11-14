@@ -54,13 +54,13 @@ impl ConnectionProvider for StandardConnection {
             Protocol::Udp => ConnectionHandleInner::Connect(Some(ConnectionHandleConnect::Udp {
                 socket_addr: config.socket_addr,
                 timeout: options.timeout,
-                #[cfg(all(windows, feature = "bindif"))]
+                #[cfg(feature = "bindif")]
                 bind_if: options.bind_if,
             })),
             Protocol::Tcp => ConnectionHandleInner::Connect(Some(ConnectionHandleConnect::Tcp {
                 socket_addr: config.socket_addr,
                 timeout: options.timeout,
-                #[cfg(all(windows, feature = "bindif"))]
+                #[cfg(feature = "bindif")]
                 bind_if: options.bind_if,
             })),
             #[cfg(feature = "dns-over-tls")]
@@ -94,13 +94,13 @@ pub(crate) enum ConnectionHandleConnect {
     Udp {
         socket_addr: SocketAddr,
         timeout: Duration,
-        #[cfg(all(windows, feature = "bindif"))]
+        #[cfg(feature = "bindif")]
         bind_if: u32,
     },
     Tcp {
         socket_addr: SocketAddr,
         timeout: Duration,
-        #[cfg(all(windows, feature = "bindif"))]
+        #[cfg(feature = "bindif")]
         bind_if: u32,
     },
     #[cfg(feature = "dns-over-tls")]
@@ -133,12 +133,12 @@ impl ConnectionHandleConnect {
             Udp {
                 socket_addr,
                 timeout,
-                #[cfg(all(windows, feature = "bindif"))]
+                #[cfg(feature = "bindif")]
                 bind_if,
             } => {
                 #[cfg(not(feature = "bindif"))]
                 let stream = UdpClientStream::with_timeout(socket_addr, timeout);
-                #[cfg(all(windows, feature = "bindif"))]
+                #[cfg(feature = "bindif")]
                 let stream = UdpClientStream::with_timeout(socket_addr, timeout, bind_if);
 
                 let (stream, handle) = DnsExchange::connect(stream);
@@ -154,12 +154,12 @@ impl ConnectionHandleConnect {
             Tcp {
                 socket_addr,
                 timeout,
-                #[cfg(all(windows, feature = "bindif"))]
+                #[cfg(feature = "bindif")]
                 bind_if,
             } => {
                 #[cfg(not(feature = "bindif"))]
                 let (stream, handle) = TcpClientStream::with_timeout(socket_addr, timeout);
-                #[cfg(all(windows, feature = "bindif"))]
+                #[cfg(feature = "bindif")]
                 let (stream, handle) = TcpClientStream::with_timeout(socket_addr, timeout, bind_if);
                 // TODO: need config for Signer...
                 let dns_conn = DnsMultiplexer::with_timeout(

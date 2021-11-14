@@ -33,7 +33,7 @@ where
     timeout: Duration,
     is_shutdown: bool,
     signer: Option<Arc<MF>>,
-    #[cfg(all(windows, feature = "bindif"))]
+    #[cfg(feature = "bindif")]
     bind_if: u32,
 }
 
@@ -60,7 +60,7 @@ impl UdpClientStream<NoopMessageFinalizer> {
     ///
     /// a tuple of a Future Stream which will handle sending and receiving messsages, and a
     ///  handle which can be used to send messages into the stream.
-    #[cfg(all(windows, feature = "bindif"))]
+    #[cfg(feature = "bindif")]
     pub fn new(name_server: SocketAddr, bind_if: u32) -> UdpClientConnect<NoopMessageFinalizer> {
         Self::with_timeout(name_server, Duration::from_secs(5), bind_if)
     }
@@ -86,7 +86,7 @@ impl UdpClientStream<NoopMessageFinalizer> {
     /// * `name_server` - the IP and Port of the DNS server to connect to
     /// * `timeout` - connection timeout
     /// * `bind_if` - the interface index to bind
-    #[cfg(all(windows, feature = "bindif"))]
+    #[cfg(feature = "bindif")]
     pub fn with_timeout(
         name_server: SocketAddr,
         timeout: Duration,
@@ -123,7 +123,7 @@ impl<MF: MessageFinalizer> UdpClientStream<MF> {
     /// * `name_server` - the IP and Port of the DNS server to connect to
     /// * `timeout` - connection timeout
     /// * `bind_if` - the interface index to bind
-    #[cfg(all(windows, feature = "bindif"))]
+    #[cfg(feature = "bindif")]
     pub fn with_timeout_and_signer(
         name_server: SocketAddr,
         timeout: Duration,
@@ -212,7 +212,7 @@ impl<MF: MessageFinalizer> DnsRequestSender for UdpClientStream<MF> {
         #[cfg(not(feature = "bindif"))]
         return UdpResponse::new(message, message_id, self.timeout);
 
-        #[cfg(all(windows, feature = "bindif"))]
+        #[cfg(feature = "bindif")]
         UdpResponse::new(message, message_id, self.timeout, self.bind_if)
     }
 
@@ -272,7 +272,7 @@ impl UdpResponse {
     /// * `request` - Serialized message being sent
     /// * `message_id` - Id of the message that was encoded in the serial message
     /// * `bind_if` - the interface index to bind
-    #[cfg(all(windows, feature = "bindif"))]
+    #[cfg(feature = "bindif")]
     fn new(request: SerialMessage, message_id: u16, timeout: Duration, bind_if: u32) -> Self {
         UdpResponse(Timeout::new(
             SingleUseUdpSocket::StartSend(Some(request), message_id, bind_if),
@@ -298,7 +298,7 @@ where
     name_server: Option<SocketAddr>,
     timeout: Duration,
     signer: Option<Arc<MF>>,
-    #[cfg(all(windows, feature = "bindif"))]
+    #[cfg(feature = "bindif")]
     bind_if: u32,
 }
 
@@ -315,7 +315,7 @@ impl<MF: MessageFinalizer> Future for UdpClientConnect<MF> {
             is_shutdown: false,
             timeout: self.timeout,
             signer: self.signer.take(),
-            #[cfg(all(windows, feature = "bindif"))]
+            #[cfg(feature = "bindif")]
             bind_if: self.bind_if,
         }))
     }
@@ -324,7 +324,7 @@ impl<MF: MessageFinalizer> Future for UdpClientConnect<MF> {
 enum SingleUseUdpSocket {
     #[cfg(not(feature = "bindif"))]
     StartSend(Option<SerialMessage>, u16),
-    #[cfg(all(windows, feature = "bindif"))]
+    #[cfg(feature = "bindif")]
     StartSend(Option<SerialMessage>, u16, u32),
     Connect(Option<SerialMessage>, NextRandomUdpSocket, u16),
     Send(Option<SerialMessage>, Option<tokio::net::UdpSocket>, u16),
@@ -350,7 +350,7 @@ impl Future for SingleUseUdpSocket {
                         .addr();
                     SingleUseUdpSocket::Connect(msg, NextRandomUdpSocket::new(&name_server), msg_id)
                 }
-                #[cfg(all(windows, feature = "bindif"))]
+                #[cfg(feature = "bindif")]
                 SingleUseUdpSocket::StartSend(ref mut msg, msg_id, bind_if) => {
                     // get a new socket to use
                     let msg = msg.take();
