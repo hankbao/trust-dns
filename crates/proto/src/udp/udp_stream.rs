@@ -48,7 +48,7 @@ impl UdpStream {
     ///
     /// a tuple of a Future Stream which will handle sending and receiving messsages, and a
     ///  handle which can be used to send messages into the stream.
-    #[cfg(any(unix, not(feature = "bindif")))]
+    #[cfg(not(feature = "bindif"))]
     pub fn new(
         name_server: SocketAddr,
     ) -> (
@@ -200,7 +200,7 @@ pub(crate) struct NextRandomUdpSocket {
 
 impl NextRandomUdpSocket {
     /// Creates a future for randomly binding to a local socket address for client connections.
-    #[cfg(any(unix, not(feature = "bindif")))]
+    #[cfg(not(feature = "bindif"))]
     pub(crate) fn new(name_server: &SocketAddr) -> NextRandomUdpSocket {
         let zero_addr: IpAddr = match *name_server {
             SocketAddr::V4(..) => IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
@@ -234,7 +234,7 @@ impl Future for NextRandomUdpSocket {
     /// polls until there is an available next random UDP port.
     ///
     /// if there is no port available after 10 attempts, returns NotReady
-    #[cfg(any(unix, not(feature = "bindif")))]
+    #[cfg(not(feature = "bindif"))]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let rand_port_range = Uniform::new_inclusive(1025_u16, u16::max_value());
         let mut rand = rand::thread_rng();

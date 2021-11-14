@@ -52,7 +52,7 @@ impl ClientConnection for UdpClientConnection {
     type SenderFuture = UdpClientConnect<Signer>;
 
     fn new_stream(&self, signer: Option<Arc<Signer>>) -> Self::SenderFuture {
-        #[cfg(any(unix, not(feature = "bindif")))]
+        #[cfg(not(feature = "bindif"))]
         return UdpClientStream::with_timeout_and_signer(self.name_server, self.timeout, signer);
         #[cfg(all(windows, feature = "bindif"))]
         return UdpClientStream::with_timeout_and_signer(
