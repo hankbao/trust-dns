@@ -20,7 +20,9 @@ use tokio::net::UdpSocket as TokioUdpSocket;
 use crate::bind_if;
 #[cfg(feature = "bindif")]
 use socket2::{Domain, Protocol, Socket, Type};
-#[cfg(feature = "bindif")]
+#[cfg(all(target_os = "macos", feature = "bindif"))]
+use std::os::unix::io::AsRawFd;
+#[cfg(all(target_os = "windows", feature = "bindif"))]
 use std::os::windows::io::AsRawSocket;
 #[cfg(feature = "bindif")]
 use tokio::reactor::Handle;
@@ -282,13 +284,28 @@ impl Future for NextRandomUdpSocket {
                     }
                     // u32::MAX means not bind
                     if self.bind_if != u32::MAX {
-                        if let Err(e) = bind_if::bind_to_if4(s.as_raw_socket(), self.bind_if) {
-                            debug!(
-                                "bind socket {} to if {} failed: {}",
-                                s.as_raw_socket(),
-                                self.bind_if,
-                                e
-                            );
+                        #[cfg(windows)]
+                        {
+                            if let Err(e) = bind_if::bind_to_if4(s.as_raw_socket(), self.bind_if) {
+                                debug!(
+                                    "bind socket {} to if {} failed: {}",
+                                    s.as_raw_socket(),
+                                    self.bind_if,
+                                    e
+                                );
+                            }
+                        }
+
+                        #[cfg(target_os = "macos")]
+                        {
+                            if let Err(e) = bind_if::bind_to_if4(s.as_raw_fd(), self.bind_if) {
+                                debug!(
+                                    "bind socket {} to if {} failed: {}",
+                                    s.as_raw_fd(),
+                                    self.bind_if,
+                                    e
+                                );
+                            }
                         }
                     }
                     s
@@ -301,13 +318,28 @@ impl Future for NextRandomUdpSocket {
                     }
                     // u32::MAX means not bind
                     if self.bind_if != u32::MAX {
-                        if let Err(e) = bind_if::bind_to_if6(s.as_raw_socket(), self.bind_if) {
-                            debug!(
-                                "bind socket {} to if {} failed: {}",
-                                s.as_raw_socket(),
-                                self.bind_if,
-                                e
-                            );
+                        #[cfg(windows)]
+                        {
+                            if let Err(e) = bind_if::bind_to_if6(s.as_raw_socket(), self.bind_if) {
+                                debug!(
+                                    "bind socket {} to if {} failed: {}",
+                                    s.as_raw_socket(),
+                                    self.bind_if,
+                                    e
+                                );
+                            }
+                        }
+
+                        #[cfg(target_os = "macos")]
+                        {
+                            if let Err(e) = bind_if::bind_to_if6(s.as_raw_fd(), self.bind_if) {
+                                debug!(
+                                    "bind socket {} to if {} failed: {}",
+                                    s.as_raw_fd(),
+                                    self.bind_if,
+                                    e
+                                );
+                            }
                         }
                     }
                     s

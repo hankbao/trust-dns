@@ -48,7 +48,7 @@ mdns = ["socket2/reuseport"]
 # WARNING: there is a bug in the mutual tls auth code at the moment see issue #100
 # mtls = ["tls"]
 
-bindif = ["winapi"]
+bindif = ["winapi", "libc"]
 
 [lib]
 name = "trust_dns_proto"
@@ -80,6 +80,9 @@ features = [
     "winsock2",
     "ws2ipdef",
 ]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 env_logger = "^0.6"
