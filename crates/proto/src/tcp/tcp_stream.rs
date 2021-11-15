@@ -403,12 +403,12 @@ impl<S: AsyncRead + AsyncWrite> Stream for TcpStream<S> {
                 match current_state {
                     Some(WriteTcpState::LenBytes { pos, length, bytes }) => {
                         if pos < length.len() {
-                            mem::replace(
+                            let _ = mem::replace(
                                 &mut self.send_state,
                                 Some(WriteTcpState::LenBytes { pos, length, bytes }),
                             );
                         } else {
-                            mem::replace(
+                            let _ = mem::replace(
                                 &mut self.send_state,
                                 Some(WriteTcpState::Bytes { pos: 0, bytes }),
                             );
@@ -416,19 +416,20 @@ impl<S: AsyncRead + AsyncWrite> Stream for TcpStream<S> {
                     }
                     Some(WriteTcpState::Bytes { pos, bytes }) => {
                         if pos < bytes.len() {
-                            mem::replace(
+                            let _ = mem::replace(
                                 &mut self.send_state,
                                 Some(WriteTcpState::Bytes { pos, bytes }),
                             );
                         } else {
                             // At this point we successfully delivered the entire message.
                             //  flush
-                            mem::replace(&mut self.send_state, Some(WriteTcpState::Flushing));
+                            let _ =
+                                mem::replace(&mut self.send_state, Some(WriteTcpState::Flushing));
                         }
                     }
                     Some(WriteTcpState::Flushing) => {
                         // At this point we successfully delivered the entire message.
-                        mem::replace(&mut self.send_state, None);
+                        let _ = mem::replace(&mut self.send_state, None);
                     }
                     None => (),
                 };
